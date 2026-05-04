@@ -34,6 +34,13 @@ def get_base_metadata(
   robot: Entity = env.scene["robot"]
   joint_action = env.action_manager.get_term("joint_pos")
   assert isinstance(joint_action, JointPositionAction)
+  obs_groups = env.observation_manager.active_terms
+  observation_names = (
+    obs_groups.get("actor")
+    or obs_groups.get("policy")
+    or obs_groups.get("critic")
+    or []
+  )
   # Build mapping from joint name to actuator ID for natural joint order.
   # Each spec actuator controls exactly one joint (via its target field).
   joint_name_to_ctrl_id = {}
@@ -55,7 +62,7 @@ def get_base_metadata(
     "joint_damping": joint_damping.tolist(),
     "default_joint_pos": robot.data.default_joint_pos[0].cpu().tolist(),
     "command_names": list(env.command_manager.active_terms),
-    "observation_names": env.observation_manager.active_terms["actor"],
+    "observation_names": observation_names,
     "action_scale": joint_action._scale[0].cpu().tolist()
     if isinstance(joint_action._scale, torch.Tensor)
     else joint_action._scale,
