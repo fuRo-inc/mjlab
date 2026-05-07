@@ -1,10 +1,13 @@
 import os
+import time
 from pathlib import Path
 
 import torch
 from rsl_rl.env import VecEnv
 from rsl_rl.runners import OnPolicyRunner
+from rsl_rl.utils import check_nan
 
+from mjlab.rl.logger import MjlabLogger
 from mjlab.rl.vecenv_wrapper import RslRlVecEnvWrapper
 
 
@@ -30,6 +33,81 @@ class MjlabOnPolicyRunner(OnPolicyRunner):
           for opt in ("rnn_type", "rnn_hidden_dim", "rnn_num_layers"):
             train_cfg[key].pop(opt, None)
     super().__init__(env, train_cfg, log_dir, device)
+    self.logger = MjlabLogger(
+      log_dir=log_dir,
+      cfg=self.cfg,
+      env_cfg=self.env.cfg,
+      num_envs=self.env.num_envs,
+      is_distributed=self.is_distributed,
+      gpu_world_size=self.gpu_world_size,
+      gpu_global_rank=self.gpu_global_rank,
+      device=self.device,
+      env=self.env,
+    )
+
+  def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False) -> None:
+    """Run the learning loop while exposing the current RL iteration to env wrappers."""
+    if init_at_random_ep_len:
+      self.env.episode_length_buf = torch.randint_like(
+        self.env.episode_length_buf,
+        high=int(self.env.max_episode_length),
+      )
+
+    obs = self.env.get_observations().to(self.device)
+    self.alg.train_mode()
+
+    if self.is_distributed:
+      print(f"Synchronizing parameters for rank {self.gpu_global_rank}...")
+      self.alg.broadcast_parameters()
+
+    self.logger.init_logging_writer()
+
+    start_it = self.current_learning_iteration
+    total_it = start_it + num_learning_iterations
+    for it in range(start_it, total_it):
+      self.current_learning_iteration = it
+      self._set_env_rl_iteration(it)
+
+      start = time.time()
+      with torch.inference_mode():
+        for _ in range(self.cfg["num_steps_per_env"]):
+          actions = self.alg.act(obs)
+          obs, rewards, dones, extras = self.env.step(actions.to(self.env.device))
+          if self.cfg.get("check_for_nan", True):
+            check_nan(obs, rewards, dones)
+          obs, rewards, dones = (obs.to(self.device), rewards.to(self.device), dones.to(self.device))
+          self.alg.process_env_step(obs, rewards, dones, extras)
+          intrinsic_rewards = self.alg.intrinsic_rewards if self.cfg["algorithm"]["rnd_cfg"] else None
+          self.logger.process_env_step(rewards, dones, extras, intrinsic_rewards)
+
+        stop = time.time()
+        collect_time = stop - start
+        start = stop
+        self.alg.compute_returns(obs)
+
+      loss_dict = self.alg.update()
+
+      stop = time.time()
+      learn_time = stop - start
+
+      self.logger.log(
+        it=it,
+        start_it=start_it,
+        total_it=total_it,
+        collect_time=collect_time,
+        learn_time=learn_time,
+        loss_dict=loss_dict,
+        learning_rate=self.alg.learning_rate,
+        action_std=self.alg.get_policy().output_std,
+        rnd_weight=self.alg.rnd.weight if self.cfg["algorithm"]["rnd_cfg"] else None,
+      )
+
+      if self.logger.writer is not None and it % self.cfg["save_interval"] == 0:
+        self.save(os.path.join(self.logger.log_dir, f"model_{it}.pt"))  # type: ignore
+
+    if self.logger.writer is not None:
+      self.save(os.path.join(self.logger.log_dir, f"model_{self.current_learning_iteration}.pt"))  # type: ignore
+      self.logger.stop_logging_writer()
 
   def export_policy_to_onnx(
     self, path: str, filename: str = "policy.onnx", verbose: bool = False
@@ -139,3 +217,26 @@ class MjlabOnPolicyRunner(OnPolicyRunner):
     if infos and "env_state" in infos:
       self.env.unwrapped.common_step_counter = infos["env_state"]["common_step_counter"]
     return infos
+
+  def _set_env_rl_iteration(self, it: int) -> None:
+    """Expose learning iteration to wrapped envs."""
+    env = self.env
+    seen = set()
+    while env is not None and id(env) not in seen:
+      seen.add(id(env))
+      try:
+        setattr(env, "_rl_iteration", int(it))
+      except Exception:
+        pass
+
+      next_env = None
+      for attr in ("_env", "env", "unwrapped", "venv"):
+        if hasattr(env, attr):
+          try:
+            candidate = getattr(env, attr)
+          except Exception:
+            candidate = None
+          if candidate is not None and candidate is not env:
+            next_env = candidate
+            break
+      env = next_env
