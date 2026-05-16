@@ -4,6 +4,10 @@ import pathlib
 import statistics
 import time
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
 import torch
 from rsl_rl.utils.logger import Logger
 
@@ -27,6 +31,49 @@ class MjlabLogger(Logger):
         if base is not None and hasattr(base, name):
           return getattr(base, name)
     return default
+
+  @staticmethod
+  def _show_extra_in_cli(key: str) -> bool:
+    hidden_prefixes = (
+      "Metrics/",
+      "Debug/",
+      "Curriculum/",
+    )
+    return not key.startswith(hidden_prefixes)
+
+  def _log_curriculum_bar_image(
+    self,
+    scalar_values: dict[str, float],
+    it: int,
+    tag: str,
+    title: str,
+    xlabel: str,
+    xlim: tuple[float, float] | None = None,
+  ) -> None:
+    if self.writer is None or not scalar_values:
+      return
+
+    names = list(scalar_values.keys())
+    values = [scalar_values[name] for name in names]
+
+    fig_height = max(3.0, 0.32 * len(names))
+    fig, ax = plt.subplots(figsize=(9.0, fig_height))
+
+    ax.barh(names, values)
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.invert_yaxis()
+    ax.grid(axis="x", alpha=0.3)
+
+    if xlim is not None:
+      ax.set_xlim(*xlim)
+
+    for i, value in enumerate(values):
+      ax.text(value, i, f" {value:.2f}", va="center", fontsize=8)
+
+    fig.tight_layout()
+    self.writer.add_figure(tag, fig, it)  # type: ignore
+    plt.close(fig)
 
   def _get_unlock_status(self) -> tuple[bool, float | None]:
     good_steps = self._get_attr_any(self.env, "lin_track_good_steps", None)
@@ -83,8 +130,19 @@ class MjlabLogger(Logger):
     self.tot_time += iteration_time
 
     extras_string = ""
+    terrain_ratio_values: dict[str, float] = {}
+    terrain_level_values: dict[str, float] = {}
+    terrain_level_max_values: dict[str, float] = {}
     if self.ep_extras:
-      for key in self.ep_extras[0]:
+      all_extra_keys = sorted(
+        {
+          key
+          for ep_info in self.ep_extras
+          for key in ep_info.keys()
+        }
+      )
+
+      for key in all_extra_keys:
         infotensor = torch.tensor([], device=self.device)
         for ep_info in self.ep_extras:
           if key not in ep_info:
@@ -94,13 +152,63 @@ class MjlabLogger(Logger):
           if len(ep_info[key].shape) == 0:
             ep_info[key] = ep_info[key].unsqueeze(0)
           infotensor = torch.cat((infotensor, ep_info[key].to(self.device)))
+
+        if infotensor.numel() == 0:
+          continue
+
         value = torch.mean(infotensor)
+        value_float = float(value.detach().cpu().item())
+
+        ratio_prefix = "Curriculum/terrain_ratio/"
+        level_prefix = "Curriculum/terrain_level/"
+        level_max_prefix = "Curriculum/terrain_level_max/"
+        if key.startswith(ratio_prefix):
+          terrain_name = key[len(ratio_prefix):]
+          terrain_ratio_values[terrain_name] = value_float
+        if key.startswith(level_max_prefix):
+          terrain_name = key[len(level_max_prefix):]
+          terrain_level_max_values[terrain_name] = value_float
+        if key.startswith(level_prefix) and not key.startswith("Curriculum/terrain_level_max/"):
+          terrain_name = key[len(level_prefix):]
+          terrain_level_values[terrain_name] = value_float
+
         if "/" in key:
           self.writer.add_scalar(key, value, it)  # type: ignore
-          extras_string += f"""{f"{key}:":>{pad}} {value:.4f}\n"""
+          if self._show_extra_in_cli(key):
+            extras_string += f"""{f"{key}:":>{pad}} {value:.4f}\n"""
         else:
           self.writer.add_scalar("Episode/" + key, value, it)  # type: ignore
           extras_string += f"""{f"Mean episode {key}:":>{pad}} {value:.4f}\n"""
+
+      image_interval = int(self.cfg.get("curriculum_image_interval", 10))
+      if image_interval <= 0:
+        image_interval = 1
+
+      if it % image_interval == 0:
+        self._log_curriculum_bar_image(
+          terrain_ratio_values,
+          it,
+          tag="CurriculumImages/terrain_ratio",
+          title="Terrain spawn ratio",
+          xlabel="spawn ratio [%]",
+          xlim=(0.0, 100.0),
+        )
+        self._log_curriculum_bar_image(
+          terrain_level_max_values,
+          it,
+          tag="CurriculumImages/terrain_level_max",
+          title="Terrain level max",
+          xlabel="max level",
+          xlim=None,
+        )
+        self._log_curriculum_bar_image(
+          terrain_level_values,
+          it,
+          tag="CurriculumImages/terrain_level",
+          title="Terrain level mean",
+          xlabel="mean level",
+          xlim=None,
+        )
 
     for key, value in loss_dict.items():
       self.writer.add_scalar(f"Loss/{key}", value, it)
