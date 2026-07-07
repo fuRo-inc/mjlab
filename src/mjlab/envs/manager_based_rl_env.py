@@ -550,6 +550,8 @@ class ManagerBasedRlEnv:
     self.curriculum_manager.compute(env_ids=env_ids)
     self.sim.reset(env_ids)
     self.scene.reset(env_ids)
+    if self.scene.terrain is not None:
+      self.scene.terrain.update_env_origins_before_reset(env_ids)
 
     if "reset" in self.event_manager.available_modes:
       env_step_count = self._sim_step_counter // self.cfg.decimation

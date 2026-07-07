@@ -216,9 +216,12 @@ def reset_root_state_from_flat_patches(
   patches = terrain.flat_patches[patch_name]  # (num_rows, num_cols, num_patches, 3)
   num_patches = patches.shape[2]
 
-  # Look up terrain level (row) and type (col) for each env.
-  levels = terrain.terrain_levels[env_ids]
-  types = terrain.terrain_types[env_ids]
+  # Look up physical terrain row/col for each env.
+  if hasattr(terrain, "get_env_physical_cell_indices"):
+    levels, types = terrain.get_env_physical_cell_indices(env_ids)
+  else:
+    levels = terrain.terrain_levels[env_ids]
+    types = terrain.terrain_types[env_ids]
 
   # Randomly select a patch index for each env.
   patch_ids = torch.randint(0, num_patches, (len(env_ids),), device=env.device)

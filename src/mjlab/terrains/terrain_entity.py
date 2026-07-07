@@ -78,6 +78,12 @@ class TerrainEntityCfg(EntityCfg):
   max_init_terrain_level: int | None = None
   """Maximum initial difficulty level (row index) for environment placement in
   curriculum mode. None uses all available rows."""
+  env_origin_sampling_mode: Literal["default", "uniform_cell"] = "default"
+  """How env origins are assigned for generated terrain.
+
+  ``"default"`` preserves the existing curriculum-style placement.
+  ``"uniform_cell"`` stratifies reset batches over physical terrain cells.
+  """
   num_envs: int = 1
   """Number of parallel environments to create. This will get overridden by the
   scene configuration if specified there."""
@@ -138,10 +144,51 @@ class TerrainEntity(Entity):
         raise ValueError(
           "terrain_generator must be specified for terrain_type 'generator'"
         )
-      terrain_generator = TerrainGenerator(
-        self.cfg.terrain_generator, device=self._device
+      terrain_generator_cls = getattr(
+        self.cfg.terrain_generator,
+        "class_type",
+        TerrainGenerator,
       )
+      if terrain_generator_cls is None:
+        terrain_generator_cls = TerrainGenerator
+      if terrain_generator_cls is not TerrainGenerator:
+        print(
+          f"[fuRo] Using terrain generator {terrain_generator_cls.__name__}"
+        )
+      terrain_generator = terrain_generator_cls(
+        self.cfg.terrain_generator,
+        device=self._device,
+      )
+      self._terrain_generator = terrain_generator
       terrain_generator.compile(self._spec)
+      self.terrain_cell_difficulty_levels = self._cell_metadata_to_tensor(
+        getattr(
+          terrain_generator,
+          "terrain_cell_difficulty_levels",
+          None,
+        )
+      )
+      self.terrain_cell_type_ids = self._cell_metadata_to_tensor(
+        getattr(
+          terrain_generator,
+          "terrain_cell_type_ids",
+          None,
+        )
+      )
+      self.terrain_cell_logical_rows = self._cell_metadata_to_tensor(
+        getattr(
+          terrain_generator,
+          "terrain_cell_logical_rows",
+          None,
+        )
+      )
+      self.terrain_cell_logical_cols = self._cell_metadata_to_tensor(
+        getattr(
+          terrain_generator,
+          "terrain_cell_logical_cols",
+          None,
+        )
+      )
       gen_cfg = self.cfg.terrain_generator
       proportions = np.array([s.proportion for s in gen_cfg.sub_terrains.values()])
       proportions = proportions / proportions.sum()
@@ -154,6 +201,10 @@ class TerrainEntity(Entity):
         terrain_generator.flat_patch_radii
       )
     elif self.cfg.terrain_type == "plane":
+      self.terrain_cell_difficulty_levels = None
+      self.terrain_cell_type_ids = None
+      self.terrain_cell_logical_rows = None
+      self.terrain_cell_logical_cols = None
       self._import_ground_plane("terrain")
       self._configure_env_origins()
       self._flat_patches: dict[str, torch.Tensor] = {}
@@ -200,9 +251,18 @@ class TerrainEntity(Entity):
       else:
         assert isinstance(origins, torch.Tensor)
       self.terrain_origins = origins.to(self._device, dtype=torch.float)
-      self.env_origins = self._compute_env_origins_curriculum(
-        self.cfg.num_envs, self.terrain_origins, proportions
-      )
+      if self.cfg.env_origin_sampling_mode == "default":
+        self.env_origins = self._compute_env_origins_curriculum(
+          self.cfg.num_envs, self.terrain_origins, proportions
+        )
+      elif self.cfg.env_origin_sampling_mode == "uniform_cell":
+        self.env_origins = self._compute_env_origins_uniform_cell(
+          self.cfg.num_envs, self.terrain_origins
+        )
+      else:
+        raise ValueError(
+          f"Unknown env_origin_sampling_mode: {self.cfg.env_origin_sampling_mode}"
+        )
     else:
       self.terrain_origins = None
       if self.cfg.env_spacing is None:
@@ -212,6 +272,17 @@ class TerrainEntity(Entity):
       self.env_origins = self._compute_env_origins_grid(
         self.cfg.num_envs, self.cfg.env_spacing
       )
+
+  def update_env_origins_before_reset(
+    self, env_ids: torch.Tensor | slice | None
+  ) -> None:
+    """Update env origins just before reset events read them."""
+    if self.terrain_origins is None:
+      return
+    if self.cfg.env_origin_sampling_mode != "uniform_cell":
+      return
+    env_ids = self._normalize_env_ids(env_ids)
+    self._assign_uniform_cell_env_origins(env_ids, debug=True)
 
   def update_env_origins(
     self,
@@ -229,9 +300,9 @@ class TerrainEntity(Entity):
       torch.randint_like(self.terrain_levels[env_ids], self.max_terrain_level),
       torch.clip(self.terrain_levels[env_ids], 0),
     )
-    self.env_origins[env_ids] = self.terrain_origins[
-      self.terrain_levels[env_ids], self.terrain_types[env_ids]
-    ]
+    self.set_env_origins_from_logical(
+      env_ids, self.terrain_levels[env_ids], self.terrain_types[env_ids]
+    )
 
   def randomize_env_origins(self, env_ids: torch.Tensor) -> None:
     """Randomize the environment origins to random sub-terrains."""
@@ -240,17 +311,181 @@ class TerrainEntity(Entity):
     assert self.env_origins is not None
     num_rows, num_cols = self.terrain_origins.shape[:2]
     num_envs = len(env_ids)
-    self.terrain_levels[env_ids] = torch.randint(
+    physical_rows = torch.randint(
       0, num_rows, (num_envs,), device=self._device
     )
-    self.terrain_types[env_ids] = torch.randint(
+    physical_cols = torch.randint(
       0, num_cols, (num_envs,), device=self._device
     )
-    self.env_origins[env_ids] = self.terrain_origins[
-      self.terrain_levels[env_ids], self.terrain_types[env_ids]
-    ]
+    self.set_env_origins_from_physical(env_ids, physical_rows, physical_cols)
+
+  def set_env_origins_from_logical(
+    self,
+    env_ids: torch.Tensor,
+    difficulty_levels: torch.Tensor,
+    type_ids: torch.Tensor,
+  ) -> None:
+    """Set origins from logical difficulty/type indices."""
+    if self.terrain_origins is None:
+      return
+    physical_rows, physical_cols = self._resolve_physical_cell_indices(
+      difficulty_levels, type_ids
+    )
+    self.set_env_origins_from_physical(
+      env_ids,
+      physical_rows,
+      physical_cols,
+      difficulty_levels=difficulty_levels,
+      type_ids=type_ids,
+    )
+
+  def set_env_origins_from_physical(
+    self,
+    env_ids: torch.Tensor,
+    physical_rows: torch.Tensor,
+    physical_cols: torch.Tensor,
+    *,
+    difficulty_levels: torch.Tensor | None = None,
+    type_ids: torch.Tensor | None = None,
+    debug: bool = False,
+  ) -> None:
+    """Set origins from physical terrain cell indices."""
+    if self.terrain_origins is None:
+      return
+    assert self.env_origins is not None
+    env_ids = self._normalize_env_ids(env_ids)
+    physical_rows = physical_rows.to(device=self._device, dtype=torch.long).clone()
+    physical_cols = physical_cols.to(device=self._device, dtype=torch.long).clone()
+    if difficulty_levels is None or type_ids is None:
+      difficulty_levels, type_ids = self._resolve_logical_cell_indices(
+        physical_rows, physical_cols
+      )
+      difficulty_levels = difficulty_levels.clone()
+      type_ids = type_ids.clone()
+    else:
+      difficulty_levels = difficulty_levels.to(
+        device=self._device, dtype=torch.long
+      ).clone()
+      type_ids = type_ids.to(device=self._device, dtype=torch.long).clone()
+
+    self._ensure_cell_index_buffers()
+    self.terrain_physical_rows[env_ids] = physical_rows
+    self.terrain_physical_cols[env_ids] = physical_cols
+    self.terrain_levels[env_ids] = difficulty_levels
+    self.terrain_types[env_ids] = type_ids
+    self.env_origins[env_ids] = self.terrain_origins[physical_rows, physical_cols]
+
+    # if debug:
+    #   print("[fuRo] uniform_cell terrain origin sampling enabled")
+    #   print(
+    #     "physical_rows min/max:",
+    #     physical_rows.min().item(),
+    #     physical_rows.max().item(),
+    #   )
+    #   print(
+    #     "physical_cols min/max:",
+    #     physical_cols.min().item(),
+    #     physical_cols.max().item(),
+    #   )
+    #   print(
+    #     "difficulty_levels min/max:",
+    #     difficulty_levels.min().item(),
+    #     difficulty_levels.max().item(),
+    #   )
+    #   print("type_ids min/max:", type_ids.min().item(), type_ids.max().item())
+
+  def get_env_physical_cell_indices(
+    self, env_ids: torch.Tensor | slice | None = None
+  ) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return physical row/col indices for env-indexed terrain arrays."""
+    env_ids = self._normalize_env_ids(env_ids)
+    if hasattr(self, "terrain_physical_rows") and hasattr(
+      self, "terrain_physical_cols"
+    ):
+      return self.terrain_physical_rows[env_ids], self.terrain_physical_cols[env_ids]
+    return self.terrain_levels[env_ids], self.terrain_types[env_ids]
 
   # Private methods.
+
+  def _cell_metadata_to_tensor(
+    self, value: np.ndarray | torch.Tensor | None
+  ) -> torch.Tensor | None:
+    if value is None:
+      return None
+    if isinstance(value, np.ndarray):
+      value = torch.from_numpy(value)
+    else:
+      assert isinstance(value, torch.Tensor)
+    return value.to(self._device, dtype=torch.long)
+
+  def _normalize_env_ids(
+    self, env_ids: torch.Tensor | slice | None
+  ) -> torch.Tensor:
+    all_env_ids = torch.arange(self.cfg.num_envs, device=self._device, dtype=torch.long)
+    if env_ids is None:
+      return all_env_ids
+    if isinstance(env_ids, slice):
+      return all_env_ids[env_ids]
+    return env_ids.to(device=self._device, dtype=torch.long)
+
+  def _ensure_cell_index_buffers(self) -> None:
+    has_buffers = (
+      hasattr(self, "terrain_levels")
+      and hasattr(self, "terrain_types")
+      and hasattr(self, "terrain_physical_rows")
+      and hasattr(self, "terrain_physical_cols")
+      and self.terrain_levels.shape == (self.cfg.num_envs,)
+      and self.terrain_types.shape == (self.cfg.num_envs,)
+      and self.terrain_physical_rows.shape == (self.cfg.num_envs,)
+      and self.terrain_physical_cols.shape == (self.cfg.num_envs,)
+    )
+    if has_buffers:
+      return
+    self.terrain_levels = torch.zeros(
+      self.cfg.num_envs, device=self._device, dtype=torch.long
+    )
+    self.terrain_types = torch.zeros(
+      self.cfg.num_envs, device=self._device, dtype=torch.long
+    )
+    self.terrain_physical_rows = torch.zeros(
+      self.cfg.num_envs, device=self._device, dtype=torch.long
+    )
+    self.terrain_physical_cols = torch.zeros(
+      self.cfg.num_envs, device=self._device, dtype=torch.long
+    )
+
+  def _resolve_logical_cell_indices(
+    self, physical_rows: torch.Tensor, physical_cols: torch.Tensor
+  ) -> tuple[torch.Tensor, torch.Tensor]:
+    difficulty_levels = self.terrain_cell_difficulty_levels
+    type_ids = self.terrain_cell_type_ids
+    if difficulty_levels is None or type_ids is None:
+      return physical_rows.long(), physical_cols.long()
+    return (
+      difficulty_levels[physical_rows, physical_cols].long(),
+      type_ids[physical_rows, physical_cols].long(),
+    )
+
+  def _resolve_physical_cell_indices(
+    self, difficulty_levels: torch.Tensor, type_ids: torch.Tensor
+  ) -> tuple[torch.Tensor, torch.Tensor]:
+    cell_difficulty = self.terrain_cell_difficulty_levels
+    cell_types = self.terrain_cell_type_ids
+    if cell_difficulty is None or cell_types is None:
+      return difficulty_levels.long(), type_ids.long()
+
+    num_rows, num_cols = cell_difficulty.shape
+    flat_difficulty = cell_difficulty.reshape(-1)
+    flat_types = cell_types.reshape(-1)
+    type_factor = int(flat_types.max().item()) + 1
+    flat_keys = flat_difficulty * type_factor + flat_types
+    keys = difficulty_levels.long() * type_factor + type_ids.long()
+    matches = keys[:, None] == flat_keys[None, :]
+    if not torch.all(matches.any(dim=1)):
+      missing = keys[~matches.any(dim=1)].detach().cpu().tolist()
+      raise ValueError(f"Logical terrain cells not found in metadata: {missing}")
+    flat_ids = matches.to(torch.long).argmax(dim=1)
+    return flat_ids // num_cols, flat_ids % num_cols
 
   def _import_ground_plane(self, name: str) -> None:
     self._spec.worldbody.add_body(name=name).add_geom(
@@ -342,27 +577,69 @@ class TerrainEntity(Entity):
       max_init_level = num_rows - 1
     else:
       max_init_level = min(self.cfg.max_init_terrain_level, num_rows - 1)
-    self.max_terrain_level = num_rows
-    self.terrain_levels = torch.randint(
+    self.max_terrain_level = self._logical_num_difficulty_levels(num_rows)
+    physical_rows = torch.randint(
       0, max_init_level + 1, (num_envs,), device=self._device
     )
 
     if proportions is not None and len(proportions) == num_cols:
       counts = _proportional_counts(num_envs, proportions)
-      self.terrain_types = torch.repeat_interleave(
+      physical_cols = torch.repeat_interleave(
         torch.arange(num_cols, device=self._device),
         torch.from_numpy(counts).to(self._device),
       )
     else:
-      self.terrain_types = torch.div(
+      physical_cols = torch.div(
         torch.arange(num_envs, device=self._device),
         (num_envs / num_cols),
         rounding_mode="floor",
       ).to(torch.long)
 
+    self.terrain_physical_rows = physical_rows.long()
+    self.terrain_physical_cols = physical_cols.long()
+    self.terrain_levels, self.terrain_types = self._resolve_logical_cell_indices(
+      self.terrain_physical_rows, self.terrain_physical_cols
+    )
     env_origins = torch.zeros(num_envs, 3, device=self._device)
-    env_origins[:] = origins[self.terrain_levels, self.terrain_types]
+    env_origins[:] = origins[self.terrain_physical_rows, self.terrain_physical_cols]
     return env_origins
+
+  def _compute_env_origins_uniform_cell(
+    self, num_envs: int, origins: torch.Tensor
+  ) -> torch.Tensor:
+    num_rows, _ = origins.shape[:2]
+    self.max_terrain_level = self._logical_num_difficulty_levels(num_rows)
+    self._ensure_cell_index_buffers()
+    self.env_origins = torch.zeros(num_envs, 3, device=self._device)
+    env_ids = torch.arange(num_envs, device=self._device, dtype=torch.long)
+    self._assign_uniform_cell_env_origins(env_ids, debug=True)
+    return self.env_origins
+
+  def _assign_uniform_cell_env_origins(
+    self, env_ids: torch.Tensor, *, debug: bool
+  ) -> None:
+    if self.terrain_origins is None or env_ids.numel() == 0:
+      return
+    num_rows, num_cols = self.terrain_origins.shape[:2]
+    num_cells = num_rows * num_cols
+    n = env_ids.numel()
+    offset = torch.randint(0, num_cells, (1,), device=self._device)
+    cell_ids = (torch.arange(n, device=self._device) + offset) % num_cells
+    cell_ids = cell_ids[torch.randperm(n, device=self._device)]
+    physical_rows = torch.div(cell_ids, num_cols, rounding_mode="floor")
+    physical_cols = cell_ids % num_cols
+    self.set_env_origins_from_physical(
+      env_ids,
+      physical_rows,
+      physical_cols,
+      debug=debug,
+    )
+
+  def _logical_num_difficulty_levels(self, fallback_num_rows: int) -> int:
+    difficulty_levels = self.terrain_cell_difficulty_levels
+    if difficulty_levels is None:
+      return fallback_num_rows
+    return int(difficulty_levels.max().item()) + 1
 
   def _compute_env_origins_grid(
     self, num_envs: int, env_spacing: float

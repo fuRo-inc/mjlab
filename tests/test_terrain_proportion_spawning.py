@@ -153,6 +153,95 @@ def test_env_origins_match_terrain_origins(terrain_entity: TerrainEntity) -> Non
     )
 
 
+def test_uniform_cell_sampling_balances_physical_cells() -> None:
+  """Uniform-cell mode should stratify over physical terrain cells."""
+  num_rows = 3
+  num_cols = 4
+  num_envs = 19
+  entity = TerrainEntity(
+    TerrainEntityCfg(
+      terrain_type="plane",
+      num_envs=num_envs,
+      env_spacing=2.0,
+      env_origin_sampling_mode="uniform_cell",
+    ),
+    device="cpu",
+  )
+  origins = _make_origins(num_rows, num_cols)
+  entity.terrain_origins = origins
+
+  result = entity._compute_env_origins_uniform_cell(num_envs, origins)
+
+  cell_ids = entity.terrain_physical_rows * num_cols + entity.terrain_physical_cols
+  counts = torch.bincount(cell_ids, minlength=num_rows * num_cols)
+  assert counts.min().item() >= 1
+  assert (counts.max() - counts.min()).item() <= 1
+  for i in range(num_envs):
+    row = int(entity.terrain_physical_rows[i].item())
+    col = int(entity.terrain_physical_cols[i].item())
+    assert torch.allclose(result[i], origins[row, col])
+
+
+def test_uniform_cell_sampling_uses_logical_metadata() -> None:
+  """Shuffled metadata should provide logical level/type for physical cells."""
+  num_envs = 4
+  entity = TerrainEntity(
+    TerrainEntityCfg(
+      terrain_type="plane",
+      num_envs=num_envs,
+      env_spacing=2.0,
+      env_origin_sampling_mode="uniform_cell",
+    ),
+    device="cpu",
+  )
+  origins = _make_origins(2, 2)
+  entity.terrain_origins = origins
+  entity.terrain_cell_difficulty_levels = torch.tensor([[1, 0], [0, 1]])
+  entity.terrain_cell_type_ids = torch.tensor([[0, 1], [0, 1]])
+
+  entity._compute_env_origins_uniform_cell(num_envs, origins)
+
+  expected_levels = entity.terrain_cell_difficulty_levels[
+    entity.terrain_physical_rows,
+    entity.terrain_physical_cols,
+  ]
+  expected_types = entity.terrain_cell_type_ids[
+    entity.terrain_physical_rows,
+    entity.terrain_physical_cols,
+  ]
+  assert torch.equal(entity.terrain_levels, expected_levels)
+  assert torch.equal(entity.terrain_types, expected_types)
+  assert not torch.equal(entity.terrain_levels, entity.terrain_physical_rows)
+
+
+def test_logical_assignment_updates_physical_indices() -> None:
+  """Logical difficulty/type assignment should resolve to the shuffled cell."""
+  entity = TerrainEntity(
+    TerrainEntityCfg(
+      terrain_type="plane",
+      num_envs=2,
+      env_spacing=2.0,
+    ),
+    device="cpu",
+  )
+  origins = _make_origins(2, 2)
+  entity.terrain_origins = origins
+  entity.env_origins = torch.zeros(2, 3)
+  entity.terrain_cell_difficulty_levels = torch.tensor([[1, 0], [0, 1]])
+  entity.terrain_cell_type_ids = torch.tensor([[0, 1], [0, 1]])
+
+  entity.set_env_origins_from_logical(
+    torch.tensor([0, 1]),
+    torch.tensor([1, 0]),
+    torch.tensor([0, 0]),
+  )
+
+  assert torch.equal(entity.terrain_physical_rows, torch.tensor([0, 1]))
+  assert torch.equal(entity.terrain_physical_cols, torch.tensor([0, 0]))
+  assert torch.allclose(entity.env_origins[0], origins[0, 0])
+  assert torch.allclose(entity.env_origins[1], origins[1, 0])
+
+
 def test_mismatched_cols_falls_back_to_even(terrain_entity: TerrainEntity) -> None:
   """When proportions length != num_cols, should fall back to even."""
   num_envs = 30
