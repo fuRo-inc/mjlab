@@ -1,4 +1,10 @@
 from mjlab.terrains.heightfield_terrains import (
+  HfDiamondGrooveTerrainCfg as HfDiamondGrooveTerrainCfg,
+)
+from mjlab.terrains.heightfield_terrains import (
+  HfMaxNormStepTerrainCfg as HfMaxNormStepTerrainCfg,
+)
+from mjlab.terrains.heightfield_terrains import (
   HfDiscreteObstaclesTerrainCfg as HfDiscreteObstaclesTerrainCfg,
 )
 from mjlab.terrains.heightfield_terrains import (

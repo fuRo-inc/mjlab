@@ -360,6 +360,284 @@ class HfPyramidSlopedTerrainCfg(SubTerrainCfg):
 
 
 @dataclass(kw_only=True)
+class HfDiamondGrooveTerrainCfg(SubTerrainCfg):
+  depth_range: tuple[float, float]
+  """Range of the groove/bump depth, in meters, interpolated by difficulty."""
+  width_range: tuple[float, float] = (0.2, 0.6)
+  """Range of the groove/bump width, in meters, interpolated by difficulty."""
+  inverted: bool = False
+  """If True, the center becomes a bump instead of a groove."""
+  border_width: float = 0.0
+  """Width of the flat border around the terrain edges, in meters. Must be >=
+  horizontal_scale if non-zero."""
+  horizontal_scale: float = 0.1
+  """Heightfield grid resolution along x and y, in meters per cell."""
+  vertical_scale: float = 0.005
+  """Heightfield height resolution, in meters per integer unit of the noise array."""
+  base_thickness_ratio: float = 1.0
+  """Ratio of the heightfield base thickness to its maximum surface height."""
+
+  def function(
+    self, difficulty: float, spec: mujoco.MjSpec, rng: np.random.Generator
+  ) -> TerrainOutput:
+    body = spec.body("terrain")
+
+    if self.border_width > 0 and self.border_width < self.horizontal_scale:
+      raise ValueError(
+        f"Border width ({self.border_width}) must be >= horizontal scale "
+        f"({self.horizontal_scale})"
+      )
+
+    border_pixels = int(self.border_width / self.horizontal_scale)
+    width_pixels = int(self.size[0] / self.horizontal_scale)
+    length_pixels = int(self.size[1] / self.horizontal_scale)
+    noise = np.zeros((width_pixels, length_pixels), dtype=np.int16)
+
+    if border_pixels > 0:
+      inner_width_pixels = width_pixels - 2 * border_pixels
+      inner_length_pixels = length_pixels - 2 * border_pixels
+      x = np.arange(border_pixels, border_pixels + inner_width_pixels, dtype=np.float32)
+      y = np.arange(border_pixels, border_pixels + inner_length_pixels, dtype=np.float32)
+    else:
+      inner_width_pixels = width_pixels
+      inner_length_pixels = length_pixels
+      x = np.arange(width_pixels, dtype=np.float32)
+      y = np.arange(length_pixels, dtype=np.float32)
+
+    xx, yy = np.meshgrid(x, y, sparse=True, indexing="ij")
+    center_x = self.size[0] / 2.0
+    center_y = self.size[1] / 2.0
+    x_coords = xx * self.horizontal_scale
+    y_coords = yy * self.horizontal_scale
+    d_l1 = np.abs(x_coords - center_x) + np.abs(y_coords - center_y)
+
+    width = self.width_range[0] + difficulty * (
+      self.width_range[1] - self.width_range[0]
+    )
+    depth = self.depth_range[0] + difficulty * (
+      self.depth_range[1] - self.depth_range[0]
+    )
+    profile = np.clip(1.0 - d_l1 / width, 0.0, 1.0)
+    elevation = depth * profile
+
+    if self.inverted:
+      elevation = -elevation
+
+    if border_pixels > 0:
+      inner_noise = np.rint(elevation / self.vertical_scale).astype(np.int16)
+      noise[
+        border_pixels : -border_pixels if border_pixels else width_pixels,
+        border_pixels : -border_pixels if border_pixels else length_pixels,
+      ] = inner_noise
+    else:
+      noise = np.rint(elevation / self.vertical_scale).astype(np.int16)
+
+    elevation_min = np.min(noise)
+    elevation_max = np.max(noise)
+    elevation_range = (
+      elevation_max - elevation_min if elevation_max != elevation_min else 1
+    )
+
+    max_physical_height = elevation_range * self.vertical_scale
+    base_thickness = max_physical_height * self.base_thickness_ratio
+
+    if elevation_range > 0:
+      normalized_elevation = (noise - elevation_min) / elevation_range
+    else:
+      normalized_elevation = np.zeros_like(noise)
+
+    unique_id = uuid.uuid4().hex
+    field = spec.add_hfield(
+      name=f"hfield_{unique_id}",
+      size=[
+        self.size[0] / 2,
+        self.size[1] / 2,
+        max_physical_height,
+        base_thickness,
+      ],
+      nrow=noise.shape[0],
+      ncol=noise.shape[1],
+      userdata=normalized_elevation.flatten().astype(np.float32).tolist(),
+    )
+
+    material_name = color_by_height(spec, noise, unique_id, normalized_elevation)
+
+    hfield_geom = body.add_geom(
+      type=mujoco.mjtGeom.mjGEOM_HFIELD,
+      hfieldname=field.name,
+      pos=[self.size[0] / 2, self.size[1] / 2, 0],
+      material=material_name,
+    )
+
+    if self.inverted:
+      hfield_z_offset = -max_physical_height
+    else:
+      hfield_z_offset = 0
+
+    origin = np.array([self.size[0] / 2, self.size[1] / 2, hfield_z_offset])
+
+    flat_patches = _compute_flat_patches(
+      noise,
+      self.vertical_scale,
+      self.horizontal_scale,
+      hfield_z_offset,
+      self.flat_patch_sampling,
+      rng,
+    )
+
+    geom = TerrainGeometry(geom=hfield_geom, hfield=field)
+    return TerrainOutput(origin=origin, geometries=[geom], flat_patches=flat_patches)
+
+
+@dataclass(kw_only=True)
+class HfMaxNormStepTerrainCfg(SubTerrainCfg):
+  step_height_range: tuple[float, float]
+  """Range of the repeated step height, in meters, interpolated by difficulty."""
+  step_width: float = 0.3
+  """Spacing between consecutive concentric square rings, in meters."""
+  mode: Literal["bump", "groove", "alternating"] = "alternating"
+  """How the ring heights alternate around the center."""
+  inverted: bool = False
+  """If True, the bump/groove sign is inverted before offsetting."""
+  border_width: float = 0.0
+  """Width of the flat border around the terrain edges, in meters. Must be >=
+  horizontal_scale if non-zero."""
+  platform_width: float = 0.6
+  """Flat square platform width at the terrain center, in meters."""
+  horizontal_scale: float = 0.1
+  """Heightfield grid resolution along x and y, in meters per cell."""
+  vertical_scale: float = 0.005
+  """Heightfield height resolution, in meters per integer unit of the noise array."""
+  base_thickness_ratio: float = 1.0
+  """Ratio of the heightfield base thickness to its maximum surface height."""
+
+  def function(
+    self, difficulty: float, spec: mujoco.MjSpec, rng: np.random.Generator
+  ) -> TerrainOutput:
+    body = spec.body("terrain")
+
+    if self.border_width > 0 and self.border_width < self.horizontal_scale:
+      raise ValueError(
+        f"Border width ({self.border_width}) must be >= horizontal scale "
+        f"({self.horizontal_scale})"
+      )
+
+    border_pixels = int(self.border_width / self.horizontal_scale)
+    width_pixels = int(self.size[0] / self.horizontal_scale)
+    length_pixels = int(self.size[1] / self.horizontal_scale)
+    noise = np.zeros((width_pixels, length_pixels), dtype=np.int16)
+
+    if border_pixels > 0:
+      inner_width_pixels = width_pixels - 2 * border_pixels
+      inner_length_pixels = length_pixels - 2 * border_pixels
+      x = np.arange(border_pixels, border_pixels + inner_width_pixels, dtype=np.float32)
+      y = np.arange(border_pixels, border_pixels + inner_length_pixels, dtype=np.float32)
+    else:
+      inner_width_pixels = width_pixels
+      inner_length_pixels = length_pixels
+      x = np.arange(width_pixels, dtype=np.float32)
+      y = np.arange(length_pixels, dtype=np.float32)
+
+    xx, yy = np.meshgrid(x, y, sparse=True, indexing="ij")
+    center_x = self.size[0] / 2.0
+    center_y = self.size[1] / 2.0
+    x_coords = xx * self.horizontal_scale
+    y_coords = yy * self.horizontal_scale
+
+    # Use the max norm / L-infinity norm so the profile follows concentric
+    # square rings around the center rather than diamond-shaped L1 contours.
+    dx = np.abs(x_coords - center_x)
+    dy = np.abs(y_coords - center_y)
+    d = np.maximum(dx, dy)
+
+    step_height = self.step_height_range[0] + difficulty * (
+      self.step_height_range[1] - self.step_height_range[0]
+    )
+    ring_idx = np.floor(
+      np.maximum(d - self.platform_width * 0.5, 0.0) / self.step_width
+    ).astype(np.int32)
+
+    if self.mode == "bump":
+      height = step_height * (ring_idx % 2 == 0).astype(np.float32)
+    elif self.mode == "groove":
+      height = -step_height * (ring_idx % 2 == 0).astype(np.float32)
+    elif self.mode == "alternating":
+      height = step_height * np.where((ring_idx % 2) == 0, 1.0, -1.0)
+    else:
+      raise ValueError(f"Unsupported mode for HfMaxNormStepTerrainCfg: {self.mode}")
+
+    if self.inverted:
+      height = -height
+
+    height = height - np.min(height)
+
+    if border_pixels > 0:
+      inner_noise = np.rint(height / self.vertical_scale).astype(np.int16)
+      noise[
+        border_pixels : -border_pixels if border_pixels else width_pixels,
+        border_pixels : -border_pixels if border_pixels else length_pixels,
+      ] = inner_noise
+    else:
+      noise = np.rint(height / self.vertical_scale).astype(np.int16)
+
+    elevation_min = np.min(noise)
+    elevation_max = np.max(noise)
+    elevation_range = (
+      elevation_max - elevation_min if elevation_max != elevation_min else 1
+    )
+
+    max_physical_height = elevation_range * self.vertical_scale
+    base_thickness = max_physical_height * self.base_thickness_ratio
+
+    if elevation_range > 0:
+      normalized_elevation = (noise - elevation_min) / elevation_range
+    else:
+      normalized_elevation = np.zeros_like(noise)
+
+    unique_id = uuid.uuid4().hex
+    field = spec.add_hfield(
+      name=f"hfield_{unique_id}",
+      size=[
+        self.size[0] / 2,
+        self.size[1] / 2,
+        max_physical_height,
+        base_thickness,
+      ],
+      nrow=noise.shape[0],
+      ncol=noise.shape[1],
+      userdata=normalized_elevation.flatten().astype(np.float32).tolist(),
+    )
+
+    if self.inverted:
+      hfield_z_offset = -max_physical_height
+    else:
+      hfield_z_offset = 0
+
+    material_name = color_by_height(spec, noise, unique_id, normalized_elevation)
+
+    hfield_geom = body.add_geom(
+      type=mujoco.mjtGeom.mjGEOM_HFIELD,
+      hfieldname=field.name,
+      pos=[self.size[0] / 2, self.size[1] / 2, hfield_z_offset],
+      material=material_name,
+    )
+
+    origin = np.array([self.size[0] / 2, self.size[1] / 2, hfield_z_offset])
+
+    flat_patches = _compute_flat_patches(
+      noise,
+      self.vertical_scale,
+      self.horizontal_scale,
+      hfield_z_offset,
+      self.flat_patch_sampling,
+      rng,
+    )
+
+    geom = TerrainGeometry(geom=hfield_geom, hfield=field)
+    return TerrainOutput(origin=origin, geometries=[geom], flat_patches=flat_patches)
+
+
+@dataclass(kw_only=True)
 class HfRandomUniformTerrainCfg(SubTerrainCfg):
   noise_range: tuple[float, float]
   """Min and max height noise, in meters."""

@@ -32,6 +32,10 @@ class MjlabOnPolicyRunner(OnPolicyRunner):
         if train_cfg[key].get("rnn_type") is None:
           for opt in ("rnn_type", "rnn_hidden_dim", "rnn_num_layers"):
             train_cfg[key].pop(opt, None)
+        if train_cfg[key].get("class_name") not in ["MLPSparseModel", "RNNSparseModel"]:
+          train_cfg[key].pop("layer_sparsity", None)
+        if train_cfg[key].get("class_name") != "RNNSparseModel":
+          train_cfg[key].pop("rnn_input_layer_sparsity", None)
     super().__init__(env, train_cfg, log_dir, device)
     self.logger = MjlabLogger(
       log_dir=log_dir,

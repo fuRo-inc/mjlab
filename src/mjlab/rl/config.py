@@ -28,6 +28,11 @@ class RslRlModelCfg:
 
   ``None`` means deterministic output (use for critic).
   """
+  first_activation_ratio: dict[str, float] | None = None
+  """
+  first_activation_ratio: Ratio of different activation functions for the first layer.
+  e.x) {"elu": 0.95, "lrelu": 0.05} means that 95% of the first layer's output will be passed through an ELU
+  """
   rnn_type: str | None = None
   """RNN type ("lstm" or "gru"). When set, class_name should be "RNNModel"."""
   rnn_hidden_dim: int = 256
@@ -35,7 +40,28 @@ class RslRlModelCfg:
   rnn_num_layers: int = 1
   """Number of stacked RNN layers."""
   class_name: str = "MLPModel"
-  """Model class name resolved by RSL-RL (MLPModel, CNNModel, or RNNModel)."""
+  """Model class name resolved by RSL-RL (MLPModel, CNNModel, or RNNModel or MLPSparseModel or RNNSparseModel)."""
+  layer_sparsity: float | list[float] | tuple[float, ...] | None = None
+  """Sparsity ratio for each Linear layer, including the output layer.
+
+  If None, no sparsity is applied.
+  If a float is given, the same sparsity is applied to all Linear layers.
+  If a list/tuple is given, values are applied in order.
+  If shorter than the number of Linear layers, missing values are filled with 0.0.
+  If longer, extra values are ignored.
+  Values outside [0, 1) are replaced with 0.0 with a warning.
+  """
+  rnn_input_layer_sparsity: float | list[float] | tuple[float, ...] | None = None
+  """Sparsity ratio for each RNN layer's input-hidden weights.
+
+  Applies only to ``weight_ih_l{k}``.
+  If None, no RNN sparsity is applied.
+  If a float is given, the same sparsity is applied to all RNN layers.
+  If a list/tuple is given, values are applied in order.
+  If shorter than ``rnn_num_layers``, missing values are filled with 0.0.
+  If longer, extra values are ignored.
+  Values outside [0, 1) are replaced with 0.0 with a warning.
+  """
 
 
 @dataclass
