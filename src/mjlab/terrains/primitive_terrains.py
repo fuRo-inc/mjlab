@@ -1771,3 +1771,278 @@ class BoxNestedRingsTerrainCfg(SubTerrainCfg):
 
     origin = np.array([terrain_center[0], terrain_center[1], platform_h])
     return TerrainOutput(origin=origin, geometries=geometries)
+@dataclass(kw_only=True)
+class BoxAlternatingPyramidStairsTerrainCfg(SubTerrainCfg):
+  """Pyramid-like alternating stairs around the center platform.
+
+  Intended structure from the center outward:
+
+      center platform (0)
+      -> lower flat (-h) with fixed post_step_width
+      -> upper flat / step surface (0) with sampled step_width
+      -> lower flat (-h) with fixed post_step_width
+      -> upper flat / step surface (0) with sampled step_width
+      -> ...
+
+  All parts are solid-filled to avoid gaps.
+  """
+
+  border_width: float = 0.25
+  """Width of the flat border frame around the terrain."""
+
+  step_height_range: tuple[float, float] = (0.05, 0.20)
+  """Min and max step height difference, in meters."""
+
+  step_width_range: tuple[float, float] = (0.4, 0.9)
+  """Min and max width/depth of the upper step surface, in meters."""
+
+  post_step_width: float = 1.0
+  """Width/depth of the lower flat surface after descending the step."""
+
+  platform_width: float = 1.0
+  """Side length of the flat square platform at the terrain center, in meters."""
+
+  base_extra_depth: float = 0.20
+  """Extra depth below the lowest surface so the terrain is fully filled."""
+
+  randomize_step_height_per_subterrain: bool = True
+  """If True, sample step height independently for each terrain cell."""
+
+  def function(
+    self, difficulty: float, spec: mujoco.MjSpec, rng: np.random.Generator
+  ) -> TerrainOutput:
+    body = spec.body("terrain")
+    geometries = []
+
+    if self.step_height_range[0] < 0.0 or self.step_height_range[1] < 0.0:
+      raise ValueError(
+        f"step_height_range must be non-negative. Got: {self.step_height_range}"
+      )
+    if self.step_height_range[0] > self.step_height_range[1]:
+      raise ValueError(
+        f"step_height_range lower bound must be <= upper bound. "
+        f"Got: {self.step_height_range}"
+      )
+
+    if self.step_width_range[0] <= 0.0 or self.step_width_range[1] <= 0.0:
+      raise ValueError(
+        f"step_width_range must be positive. Got: {self.step_width_range}"
+      )
+    if self.step_width_range[0] > self.step_width_range[1]:
+      raise ValueError(
+        f"step_width_range lower bound must be <= upper bound. "
+        f"Got: {self.step_width_range}"
+      )
+
+    if self.post_step_width <= 0.0:
+      raise ValueError(f"post_step_width must be positive. Got: {self.post_step_width}")
+
+    if self.platform_width <= 0.0:
+      raise ValueError(f"platform_width must be positive. Got: {self.platform_width}")
+
+    if self.base_extra_depth < 0.0:
+      raise ValueError(
+        f"base_extra_depth must be non-negative. Got: {self.base_extra_depth}"
+      )
+
+    # ----------------------------------------------------------------------
+    # Height sampling
+    # ----------------------------------------------------------------------
+    min_step_height = float(self.step_height_range[0])
+    max_step_height = float(self.step_height_range[1])
+
+    if self.randomize_step_height_per_subterrain:
+      # 明確に差が出るように full range からサンプル
+      step_height = float(rng.uniform(min_step_height, max_step_height))
+    else:
+      # curriculum 用に deterministic に difficulty 反映
+      step_height = min_step_height + difficulty * (max_step_height - min_step_height)
+
+    terrain_center = [0.5 * self.size[0], 0.5 * self.size[1], 0.0]
+
+    inner_size_x = self.size[0] - 2.0 * self.border_width
+    inner_size_y = self.size[1] - 2.0 * self.border_width
+
+    if inner_size_x <= 0.0 or inner_size_y <= 0.0:
+      raise ValueError(
+        f"border_width={self.border_width} is too large for terrain size={self.size}."
+      )
+
+    if self.platform_width >= inner_size_x or self.platform_width >= inner_size_y:
+      raise ValueError(
+        f"platform_width={self.platform_width} must be smaller than inner terrain "
+        f"size=({inner_size_x}, {inner_size_y})."
+      )
+
+    # 共通底面。全部 solid にして隙間をなくす
+    base_bottom_z = -step_height - self.base_extra_depth
+
+    def _add_solid_box(
+      center_x: float,
+      center_y: float,
+      size_x: float,
+      size_y: float,
+      top_z: float,
+      rgba: tuple[float, float, float, float],
+    ) -> None:
+      size_x = float(np.maximum(1.0e-6, size_x))
+      size_y = float(np.maximum(1.0e-6, size_y))
+
+      total_height = float(np.maximum(1.0e-6, top_z - base_bottom_z))
+      center_z = base_bottom_z + total_height / 2.0
+
+      geom = body.add_geom(
+        type=mujoco.mjtGeom.mjGEOM_BOX,
+        size=(size_x / 2.0, size_y / 2.0, total_height / 2.0),
+        pos=(center_x, center_y, center_z),
+      )
+      geometries.append(TerrainGeometry(geom=geom, color=rgba))
+
+    def _add_ring(
+      outer_size_x: float,
+      outer_size_y: float,
+      inner_size_x: float,
+      inner_size_y: float,
+      top_z: float,
+      rgba: tuple[float, float, float, float],
+    ) -> None:
+      dx = outer_size_x - inner_size_x
+      dy = outer_size_y - inner_size_y
+
+      if dx <= 1.0e-6 or dy <= 1.0e-6:
+        return
+
+      ring_wx = dx / 2.0
+      ring_wy = dy / 2.0
+
+      cx = terrain_center[0]
+      cy = terrain_center[1]
+
+      # Top strip
+      _add_solid_box(
+        center_x=cx,
+        center_y=cy + (inner_size_y / 2.0 + ring_wy / 2.0),
+        size_x=outer_size_x,
+        size_y=ring_wy,
+        top_z=top_z,
+        rgba=rgba,
+      )
+
+      # Bottom strip
+      _add_solid_box(
+        center_x=cx,
+        center_y=cy - (inner_size_y / 2.0 + ring_wy / 2.0),
+        size_x=outer_size_x,
+        size_y=ring_wy,
+        top_z=top_z,
+        rgba=rgba,
+      )
+
+      # Right strip
+      _add_solid_box(
+        center_x=cx + (inner_size_x / 2.0 + ring_wx / 2.0),
+        center_y=cy,
+        size_x=ring_wx,
+        size_y=inner_size_y,
+        top_z=top_z,
+        rgba=rgba,
+      )
+
+      # Left strip
+      _add_solid_box(
+        center_x=cx - (inner_size_x / 2.0 + ring_wx / 2.0),
+        center_y=cy,
+        size_x=ring_wx,
+        size_y=inner_size_y,
+        top_z=top_z,
+        rgba=rgba,
+      )
+
+    # ----------------------------------------------------------------------
+    # Outer border at z=0
+    # ----------------------------------------------------------------------
+    border_rgba = darken_rgba(brand_ramp(_MUJOCO_BLUE, 0.0), 0.85)
+
+    if self.border_width > 0.0:
+      _add_ring(
+        outer_size_x=self.size[0],
+        outer_size_y=self.size[1],
+        inner_size_x=inner_size_x,
+        inner_size_y=inner_size_y,
+        top_z=0.0,
+        rgba=border_rgba,
+      )
+
+    # ----------------------------------------------------------------------
+    # Center platform at z=0
+    # ----------------------------------------------------------------------
+    platform_rgba = _get_platform_color(_MUJOCO_BLUE)
+    _add_solid_box(
+      center_x=terrain_center[0],
+      center_y=terrain_center[1],
+      size_x=self.platform_width,
+      size_y=self.platform_width,
+      top_z=0.0,
+      rgba=platform_rgba,
+    )
+
+    # ----------------------------------------------------------------------
+    # Expand outward:
+    #   1) lower flat  (-step_height) with fixed post_step_width
+    #   2) upper flat  (0.0)         with sampled step_width
+    #   3) lower flat  (-step_height) with fixed post_step_width
+    #   4) upper flat  (0.0)         with sampled step_width
+    # ----------------------------------------------------------------------
+    current_inner_x = self.platform_width
+    current_inner_y = self.platform_width
+    is_lower_flat_ring = True
+    ring_idx = 0
+
+    while (
+      current_inner_x < inner_size_x - 1.0e-6
+      and current_inner_y < inner_size_y - 1.0e-6
+    ):
+      if is_lower_flat_ring:
+        ring_width = float(self.post_step_width)
+        top_z = -step_height
+      else:
+        ring_width = float(
+          rng.uniform(self.step_width_range[0], self.step_width_range[1])
+        )
+        top_z = 0.0
+
+      next_outer_x = min(current_inner_x + 2.0 * ring_width, inner_size_x)
+      next_outer_y = min(current_inner_y + 2.0 * ring_width, inner_size_y)
+
+      if next_outer_x <= current_inner_x + 1.0e-6:
+        break
+      if next_outer_y <= current_inner_y + 1.0e-6:
+        break
+
+      estimated_num_rings = int(
+        max(inner_size_x, inner_size_y)
+        / max(min(self.step_width_range[0], self.post_step_width), 1.0e-6)
+      )
+      t = ring_idx / max(estimated_num_rings, 1)
+
+      if is_lower_flat_ring:
+        rgba = brand_ramp(_MUJOCO_BLUE, float(np.clip(t, 0.15, 0.45)))
+      else:
+        rgba = brand_ramp(_MUJOCO_BLUE, float(np.clip(t, 0.55, 0.85)))
+
+      _add_ring(
+        outer_size_x=next_outer_x,
+        outer_size_y=next_outer_y,
+        inner_size_x=current_inner_x,
+        inner_size_y=current_inner_y,
+        top_z=top_z,
+        rgba=rgba,
+      )
+
+      current_inner_x = next_outer_x
+      current_inner_y = next_outer_y
+      is_lower_flat_ring = not is_lower_flat_ring
+      ring_idx += 1
+
+    origin = np.array([terrain_center[0], terrain_center[1], 0.0])
+    return TerrainOutput(origin=origin, geometries=geometries)
