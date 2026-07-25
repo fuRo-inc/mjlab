@@ -32,6 +32,29 @@ def test_preset_overrides():
   assert cfg.platform_width == 3.0
 
 
+def test_pyramid_stairs_step_width_range_affects_generated_height():
+  cfg = terrain_gen.BoxPyramidStairsTerrainCfg(
+    proportion=1.0,
+    size=(4.0, 4.0),
+    step_height_range=(0.1, 0.1),
+    step_width=0.6,
+    step_width_range=(0.3, 0.6),
+    platform_width=1.0,
+    border_width=0.0,
+  )
+  spec_easy = mujoco.MjSpec()
+  spec_easy.worldbody.add_body(name="terrain")
+  spec_hard = mujoco.MjSpec()
+  spec_hard.worldbody.add_body(name="terrain")
+  rng = np.random.default_rng(42)
+
+  easy = cfg.function(difficulty=0.0, spec=spec_easy, rng=rng)
+  hard = cfg.function(difficulty=1.0, spec=spec_hard, rng=rng)
+
+  assert cfg.step_width_range == (0.3, 0.6)
+  assert hard.origin[2] > easy.origin[2]
+
+
 def test_rough_terrains_cfg_structure():
   assert ROUGH_TERRAINS_CFG.size == (8.0, 8.0)
   assert ROUGH_TERRAINS_CFG.num_rows == 10
