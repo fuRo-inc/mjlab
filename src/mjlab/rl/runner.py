@@ -5,6 +5,7 @@ import torch
 from rsl_rl.env import VecEnv
 from rsl_rl.runners import OnPolicyRunner
 
+from mjlab.rl.logger import MjlabLogger
 from mjlab.rl.vecenv_wrapper import RslRlVecEnvWrapper
 
 
@@ -30,6 +31,17 @@ class MjlabOnPolicyRunner(OnPolicyRunner):
           for opt in ("rnn_type", "rnn_hidden_dim", "rnn_num_layers"):
             train_cfg[key].pop(opt, None)
     super().__init__(env, train_cfg, log_dir, device)
+    self.logger = MjlabLogger(
+      log_dir=log_dir,
+      cfg=self.cfg,
+      env_cfg=self.env.cfg,
+      num_envs=self.env.num_envs,
+      is_distributed=self.is_distributed,
+      gpu_world_size=self.gpu_world_size,
+      gpu_global_rank=self.gpu_global_rank,
+      device=self.device,
+      env=self.env,
+    )
 
   def export_policy_to_onnx(
     self, path: str, filename: str = "policy.onnx", verbose: bool = False
