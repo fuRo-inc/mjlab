@@ -60,7 +60,7 @@ class BoxPyramidStairsTerrainCfg(SubTerrainCfg):
   when holes is True."""
   step_height_range: tuple[float, float]
   """Min and max step height, in meters. Interpolated by difficulty."""
-  step_width: float
+  step_width: float = 0.3
   """Depth (run) of each step, in meters."""
   step_width_range: tuple[float, float] | None = None
   """Optional min and max step width, in meters. When set, width is interpolated
