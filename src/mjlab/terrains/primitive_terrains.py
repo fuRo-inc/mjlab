@@ -1976,7 +1976,7 @@ class BoxAlternatingPyramidStairsTerrainCfg(SubTerrainCfg):
     # ----------------------------------------------------------------------
     # Center platform at z=0
     # ----------------------------------------------------------------------
-    platform_rgba = _get_platform_color(_MUJOCO_BLUE)
+    platform_rgba = brand_ramp(_MUJOCO_BLUE, 0.5)
     _add_solid_box(
       center_x=terrain_center[0],
       center_y=terrain_center[1],
