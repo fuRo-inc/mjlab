@@ -64,11 +64,24 @@ def get_base_metadata(
   observation_term_flatten_history_dim: list = []
   observation_term_history_length: list = []
   observation_term_clip: list = []
-  observation_names = env.observation_manager.active_terms["actor"]
+  obs_groups = env.observation_manager.active_terms
 
+  if obs_groups.get("actor"):
+    observation_group_name = "actor"
+  elif obs_groups.get("policy"):
+    observation_group_name = "policy"
+  else:
+    raise KeyError(
+      "No actor or policy observation group found for policy export. "
+      f"Available groups: {list(obs_groups)}"
+    )
+
+  observation_names = obs_groups[observation_group_name]
   for active_term in observation_names:
-    cfg = env.observation_manager.get_term_cfg("actor", active_term)
-
+    cfg = env.observation_manager.get_term_cfg(
+      observation_group_name,
+      active_term,
+    )
     if cfg.scale is None:
       observation_term_scale.append(1.0)
     else:
