@@ -45,6 +45,9 @@ from mjlab.terrains.primitive_terrains import (
 from mjlab.terrains.primitive_terrains import (
   BoxTiltedGridTerrainCfg as BoxTiltedGridTerrainCfg,
 )
+from mjlab.terrains.split_offset_stairs import (
+  BoxSplitOffsetPyramidStairsTerrainCfg as BoxSplitOffsetPyramidStairsTerrainCfg,
+)
 from mjlab.terrains.terrain_entity import TerrainEntity as TerrainEntity
 from mjlab.terrains.terrain_entity import TerrainEntityCfg as TerrainEntityCfg
 from mjlab.terrains.terrain_generator import (
