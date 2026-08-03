@@ -1,8 +1,8 @@
-"""Pyramid stairs with low barriers on the treads.
+"""Pyramid stairs with low longitudinal barriers.
 
-The barriers are placed behind the stair nosings so that sliding a low foot over
-the nosing is insufficient: the foot must retain clearance after entering the
-tread. The base stair geometry remains a conventional pyramid staircase.
+The barriers run in the stair-climbing direction and form loose lanes on each
+stair face. They restrict lateral foot escape and diagonal sliding while leaving
+forward stair traversal open.
 """
 
 from __future__ import annotations
@@ -17,14 +17,19 @@ from mjlab.terrains.utils import make_border
 from mjlab.utils.color import brand_ramp, darken_rgba
 
 _MUJOCO_PURPLE = (0.58, 0.36, 0.90)
-_BARRIER_COLOR = (0.90, 0.45, 0.20)
+_BARRIER_COLOR = (0.90, 0.45, 0.20, 1.0)
 _MIN_BORDER_HEIGHT = 0.05
 _MIN_GEOM_SIZE = 1.0e-6
 
 
 @dataclass(kw_only=True)
 class BoxHurdlePyramidStairsTerrainCfg(SubTerrainCfg):
-  """Pyramid stairs with low full-width barriers on selected treads."""
+  """Pyramid stairs with low barriers aligned with the climbing direction.
+
+  The existing ``hurdle_*`` parameter names are retained for compatibility:
+  ``hurdle_depth`` is the wall thickness and ``hurdle_setback`` is the lateral
+  edge margin used when laying out lane dividers.
+  """
 
   border_width: float = 0.0
   """Width of the flat border frame around the staircase, in meters."""
@@ -42,22 +47,25 @@ class BoxHurdlePyramidStairsTerrainCfg(SubTerrainCfg):
   """Side length of the center platform."""
 
   hurdle_height_range: tuple[float, float] = (0.03, 0.07)
-  """Barrier height range above the tread, interpolated by difficulty."""
+  """Longitudinal wall height range, interpolated by difficulty."""
 
-  hurdle_depth: float = 0.06
-  """Barrier thickness along the stair travel direction."""
+  hurdle_depth: float = 0.04
+  """Longitudinal wall thickness, in meters."""
 
   hurdle_setback: float = 0.08
-  """Distance from the stair nosing to the near face of the barrier."""
+  """Minimum lateral margin between the outer stair edge and a wall."""
 
   hurdle_probability: float = 0.5
-  """Probability that a given stair level receives barriers."""
+  """Probability that a stair level receives longitudinal wall segments."""
 
   randomize_hurdle_height_per_step: bool = True
-  """Sample each barrier level from zero to the difficulty-scaled height."""
+  """Sample the wall height independently for each stair level."""
 
   alternate_hurdles: bool = False
-  """Place barriers deterministically on alternating stair levels."""
+  """Place wall segments deterministically on alternating stair levels."""
+
+  lane_width: float = 0.65
+  """Target spacing between adjacent longitudinal walls, in meters."""
 
   def function(
     self, difficulty: float, spec: mujoco.MjSpec, rng: np.random.Generator
@@ -76,6 +84,8 @@ class BoxHurdlePyramidStairsTerrainCfg(SubTerrainCfg):
       raise ValueError("hurdle_setback must be non-negative")
     if not 0.0 <= self.hurdle_probability <= 1.0:
       raise ValueError("hurdle_probability must be in [0, 1]")
+    if self.lane_width <= self.hurdle_depth:
+      raise ValueError("lane_width must be larger than hurdle_depth")
 
     step_height = self.step_height_range[0] + difficulty * (
       self.step_height_range[1] - self.step_height_range[0]
@@ -87,10 +97,6 @@ class BoxHurdlePyramidStairsTerrainCfg(SubTerrainCfg):
       )
     if step_width <= 0.0:
       raise ValueError("step width must be positive")
-    if self.hurdle_setback + self.hurdle_depth >= step_width:
-      raise ValueError(
-        "hurdle_setback + hurdle_depth must be smaller than the tread depth"
-      )
 
     max_hurdle_height = self.hurdle_height_range[0] + difficulty * (
       self.hurdle_height_range[1] - self.hurdle_height_range[0]
@@ -144,6 +150,15 @@ class BoxHurdlePyramidStairsTerrainCfg(SubTerrainCfg):
       boxes.append(geom)
       colors.append(color)
 
+    def divider_positions(center: float, span: float) -> list[float]:
+      usable_span = span - 2.0 * self.hurdle_setback
+      if usable_span <= self.lane_width:
+        return []
+      num_lanes = max(1, int(np.floor(usable_span / self.lane_width)))
+      actual_lane_width = usable_span / num_lanes
+      first_edge = center - 0.5 * usable_span
+      return [first_edge + i * actual_lane_width for i in range(1, num_lanes)]
+
     for k in range(num_steps):
       step_color = brand_ramp(_MUJOCO_PURPLE, k / max(num_steps - 1, 1))
       remaining_x = terrain_size[0] - 2.0 * k * step_width
@@ -152,43 +167,32 @@ class BoxHurdlePyramidStairsTerrainCfg(SubTerrainCfg):
       box_height = (k + 2) * step_height
       nominal_offset = (k + 0.5) * step_width
 
-      # Conventional stair boxes.
+      top_y = terrain_center[1] + 0.5 * terrain_size[1] - nominal_offset
+      bottom_y = terrain_center[1] - 0.5 * terrain_size[1] + nominal_offset
+      right_x = terrain_center[0] + 0.5 * terrain_size[0] - nominal_offset
+      left_x = terrain_center[0] - 0.5 * terrain_size[0] + nominal_offset
+
+      # Conventional pyramid stair boxes.
       add_box(
         (remaining_x, step_width, box_height),
-        (
-          terrain_center[0],
-          terrain_center[1] + 0.5 * terrain_size[1] - nominal_offset,
-          box_z,
-        ),
+        (terrain_center[0], top_y, box_z),
         step_color,
       )
       add_box(
         (remaining_x, step_width, box_height),
-        (
-          terrain_center[0],
-          terrain_center[1] - 0.5 * terrain_size[1] + nominal_offset,
-          box_z,
-        ),
+        (terrain_center[0], bottom_y, box_z),
         step_color,
       )
 
       side_span_y = max(_MIN_GEOM_SIZE, remaining_y - 2.0 * step_width)
       add_box(
         (step_width, side_span_y, box_height),
-        (
-          terrain_center[0] + 0.5 * terrain_size[0] - nominal_offset,
-          terrain_center[1],
-          box_z,
-        ),
+        (right_x, terrain_center[1], box_z),
         step_color,
       )
       add_box(
         (step_width, side_span_y, box_height),
-        (
-          terrain_center[0] - 0.5 * terrain_size[0] + nominal_offset,
-          terrain_center[1],
-          box_z,
-        ),
+        (left_x, terrain_center[1], box_z),
         step_color,
       )
 
@@ -209,39 +213,32 @@ class BoxHurdlePyramidStairsTerrainCfg(SubTerrainCfg):
 
       tread_top_z = (k + 1) * step_height
       hurdle_z = tread_top_z + 0.5 * hurdle_height
-      inward = self.hurdle_setback + 0.5 * self.hurdle_depth
 
-      # Top face: travel toward -y.
-      top_outer_y = terrain_center[1] + 0.5 * terrain_size[1] - k * step_width
-      add_box(
-        (remaining_x, self.hurdle_depth, hurdle_height),
-        (terrain_center[0], top_outer_y - inward, hurdle_z),
-        _BARRIER_COLOR,
-      )
+      # Top and bottom faces climb along y, so the walls are y-aligned.
+      for x_pos in divider_positions(terrain_center[0], remaining_x):
+        add_box(
+          (self.hurdle_depth, step_width, hurdle_height),
+          (x_pos, top_y, hurdle_z),
+          _BARRIER_COLOR,
+        )
+        add_box(
+          (self.hurdle_depth, step_width, hurdle_height),
+          (x_pos, bottom_y, hurdle_z),
+          _BARRIER_COLOR,
+        )
 
-      # Bottom face: travel toward +y.
-      bottom_outer_y = terrain_center[1] - 0.5 * terrain_size[1] + k * step_width
-      add_box(
-        (remaining_x, self.hurdle_depth, hurdle_height),
-        (terrain_center[0], bottom_outer_y + inward, hurdle_z),
-        _BARRIER_COLOR,
-      )
-
-      # Right face: travel toward -x.
-      right_outer_x = terrain_center[0] + 0.5 * terrain_size[0] - k * step_width
-      add_box(
-        (self.hurdle_depth, side_span_y, hurdle_height),
-        (right_outer_x - inward, terrain_center[1], hurdle_z),
-        _BARRIER_COLOR,
-      )
-
-      # Left face: travel toward +x.
-      left_outer_x = terrain_center[0] - 0.5 * terrain_size[0] + k * step_width
-      add_box(
-        (self.hurdle_depth, side_span_y, hurdle_height),
-        (left_outer_x + inward, terrain_center[1], hurdle_z),
-        _BARRIER_COLOR,
-      )
+      # Left and right faces climb along x, so the walls are x-aligned.
+      for y_pos in divider_positions(terrain_center[1], side_span_y):
+        add_box(
+          (step_width, self.hurdle_depth, hurdle_height),
+          (right_x, y_pos, hurdle_z),
+          _BARRIER_COLOR,
+        )
+        add_box(
+          (step_width, self.hurdle_depth, hurdle_height),
+          (left_x, y_pos, hurdle_z),
+          _BARRIER_COLOR,
+        )
 
     center_dims = (
       terrain_size[0] - 2.0 * num_steps * step_width,
