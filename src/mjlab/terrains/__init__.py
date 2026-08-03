@@ -1,3 +1,6 @@
+from mjlab.terrains.corridor_stairs import (
+  BoxCorridorPyramidStairsTerrainCfg as BoxCorridorPyramidStairsTerrainCfg,
+)
 from mjlab.terrains.heightfield_terrains import (
   HfDiscreteObstaclesTerrainCfg as HfDiscreteObstaclesTerrainCfg,
 )
@@ -11,9 +14,6 @@ from mjlab.terrains.heightfield_terrains import (
   HfRandomUniformTerrainCfg as HfRandomUniformTerrainCfg,
 )
 from mjlab.terrains.heightfield_terrains import HfWaveTerrainCfg as HfWaveTerrainCfg
-from mjlab.terrains.hurdle_stairs import (
-  BoxHurdlePyramidStairsTerrainCfg as BoxHurdlePyramidStairsTerrainCfg,
-)
 from mjlab.terrains.primitive_terrains import (
   BoxAlternatingPyramidStairsTerrainCfg as BoxAlternatingPyramidStairsTerrainCfg,
 )
