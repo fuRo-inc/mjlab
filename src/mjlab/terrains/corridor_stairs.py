@@ -3,7 +3,7 @@
 Each stair face contains one central corridor. Two stepped side walls follow the
 radial direction between the outer edge and center platform. The same terrain
 can be generated as a normal pyramid (high center, downhill outward) or an
-inverted pyramid (low center, uphill outward).
+inverted pyramid (low center below the surrounding ground, uphill outward).
 """
 
 from __future__ import annotations
@@ -55,10 +55,11 @@ class BoxCorridorPyramidStairsTerrainCfg(SubTerrainCfg):
   """Close the platform perimeter except at the four corridor openings."""
 
   inverted: bool = False
-  """If True, make the center platform low and the outer stairs high.
+  """If True, sink the center platform below the surrounding ground plane.
 
-  The robot can then spawn on the center platform and climb outward. If False,
-  the center platform is high and the robot descends outward.
+  The outermost tread is flush with z=0 and each tread toward the center is one
+  step lower. The robot can spawn on the low center platform and climb outward.
+  If False, the center platform is high and the robot descends outward.
   """
 
   def function(
@@ -154,15 +155,23 @@ class BoxCorridorPyramidStairsTerrainCfg(SubTerrainCfg):
       boxes.append(geom)
       colors.append(color)
 
+    # All inverted surfaces are below the surrounding z=0 plane. The outermost
+    # tread is exactly flush with z=0, and the center platform is num_steps
+    # risers below it.
+    support_bottom_z = (
+      terrain_center[2] - (num_steps + 1) * step_height
+      if self.inverted
+      else terrain_center[2] - step_height
+    )
+
     def tread_top(k: int) -> float:
       if self.inverted:
-        return terrain_center[2] + (num_steps - k) * step_height
+        return terrain_center[2] - k * step_height
       return terrain_center[2] + (k + 1) * step_height
 
     def support_box_z_and_height(top_z: float) -> tuple[float, float]:
-      bottom_z = terrain_center[2] - step_height
-      height = max(_MIN_GEOM_SIZE, top_z - bottom_z)
-      return 0.5 * (top_z + bottom_z), height
+      height = max(_MIN_GEOM_SIZE, top_z - support_bottom_z)
+      return 0.5 * (top_z + support_bottom_z), height
 
     half_corridor = 0.5 * corridor_width
 
@@ -241,7 +250,7 @@ class BoxCorridorPyramidStairsTerrainCfg(SubTerrainCfg):
         )
 
     center_top_z = (
-      terrain_center[2]
+      terrain_center[2] - num_steps * step_height
       if self.inverted
       else terrain_center[2] + (num_steps + 1) * step_height
     )
