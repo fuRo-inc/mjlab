@@ -56,3 +56,6 @@ from mjlab.terrains.terrain_generator import (
 from mjlab.terrains.terrain_generator import SubTerrainCfg as SubTerrainCfg
 from mjlab.terrains.terrain_generator import TerrainGenerator as TerrainGenerator
 from mjlab.terrains.terrain_generator import TerrainGeneratorCfg as TerrainGeneratorCfg
+
+# Install actual generated terrain-type tracking for both curriculum and random modes.
+from mjlab.terrains import terrain_type_tracking as terrain_type_tracking
