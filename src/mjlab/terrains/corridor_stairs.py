@@ -1,10 +1,9 @@
 """Pyramid stairs constrained by continuous side walls.
 
 Each stair face contains one central corridor. Two stepped side walls follow the
-climbing direction from the outer edge to the center platform, limiting lateral
-escape and large body-yaw deviations while preserving the ordinary stair treads.
-The center platform perimeter is also guarded, leaving openings only at the four
-corridor entrances.
+radial direction between the outer edge and center platform. The same terrain
+can be generated as a normal pyramid (high center, downhill outward) or an
+inverted pyramid (low center, uphill outward).
 """
 
 from __future__ import annotations
@@ -44,11 +43,7 @@ class BoxCorridorPyramidStairsTerrainCfg(SubTerrainCfg):
   """Side length of the center platform."""
 
   corridor_width_range: tuple[float, float] = (0.70, 1.00)
-  """Min and max clear corridor width.
-
-  Width is interpolated from max to min as difficulty increases, so higher
-  difficulty provides less lateral room.
-  """
+  """Min and max clear corridor width."""
 
   wall_height_range: tuple[float, float] = (0.10, 0.25)
   """Min and max wall height above each tread, interpolated by difficulty."""
@@ -58,6 +53,13 @@ class BoxCorridorPyramidStairsTerrainCfg(SubTerrainCfg):
 
   guard_center_platform: bool = True
   """Close the platform perimeter except at the four corridor openings."""
+
+  inverted: bool = False
+  """If True, make the center platform low and the outer stairs high.
+
+  The robot can then spawn on the center platform and climb outward. If False,
+  the center platform is high and the robot descends outward.
+  """
 
   def function(
     self, difficulty: float, spec: mujoco.MjSpec, rng: np.random.Generator
@@ -152,14 +154,27 @@ class BoxCorridorPyramidStairsTerrainCfg(SubTerrainCfg):
       boxes.append(geom)
       colors.append(color)
 
+    def tread_top(k: int) -> float:
+      if self.inverted:
+        return terrain_center[2] + (num_steps - k) * step_height
+      return terrain_center[2] + (k + 1) * step_height
+
+    def support_box_z_and_height(top_z: float) -> tuple[float, float]:
+      bottom_z = terrain_center[2] - step_height
+      height = max(_MIN_GEOM_SIZE, top_z - bottom_z)
+      return 0.5 * (top_z + bottom_z), height
+
     half_corridor = 0.5 * corridor_width
 
     for k in range(num_steps):
-      step_color = brand_ramp(_MUJOCO_PURPLE, k / max(num_steps - 1, 1))
+      color_t = k / max(num_steps - 1, 1)
+      if self.inverted:
+        color_t = 1.0 - color_t
+      step_color = brand_ramp(_MUJOCO_PURPLE, color_t)
       remaining_x = terrain_size[0] - 2.0 * k * step_width
       remaining_y = terrain_size[1] - 2.0 * k * step_width
-      box_z = terrain_center[2] + 0.5 * k * step_height
-      box_height = (k + 2) * step_height
+      top_z = tread_top(k)
+      box_z, box_height = support_box_z_and_height(top_z)
       nominal_offset = (k + 0.5) * step_width
 
       top_y = terrain_center[1] + 0.5 * terrain_size[1] - nominal_offset
@@ -193,8 +208,7 @@ class BoxCorridorPyramidStairsTerrainCfg(SubTerrainCfg):
       if wall_height <= _MIN_GEOM_SIZE:
         continue
 
-      tread_top_z = (k + 1) * step_height
-      wall_z = tread_top_z + 0.5 * wall_height
+      wall_z = top_z + 0.5 * wall_height
 
       for x_pos in (
         terrain_center[0] - half_corridor - 0.5 * self.wall_thickness,
@@ -226,21 +240,27 @@ class BoxCorridorPyramidStairsTerrainCfg(SubTerrainCfg):
           _BARRIER_COLOR,
         )
 
+    center_top_z = (
+      terrain_center[2]
+      if self.inverted
+      else terrain_center[2] + (num_steps + 1) * step_height
+    )
+    center_box_z, center_height = support_box_z_and_height(center_top_z)
     center_dims = (
       terrain_size[0] - 2.0 * num_steps * step_width,
       terrain_size[1] - 2.0 * num_steps * step_width,
-      (num_steps + 2) * step_height,
+      center_height,
     )
     center_pos = (
       terrain_center[0],
       terrain_center[1],
-      terrain_center[2] + 0.5 * num_steps * step_height,
+      center_box_z,
     )
-    center_color = brand_ramp(_MUJOCO_PURPLE, 1.0)
+    center_color = brand_ramp(_MUJOCO_PURPLE, 0.0 if self.inverted else 1.0)
     add_box(center_dims, center_pos, center_color)
 
     if self.guard_center_platform and wall_height > _MIN_GEOM_SIZE:
-      platform_top_z = terrain_center[2] + (num_steps + 1) * step_height
+      platform_top_z = center_top_z
       wall_z = platform_top_z + 0.5 * wall_height
       half_x = 0.5 * center_dims[0]
       half_y = 0.5 * center_dims[1]
@@ -279,9 +299,7 @@ class BoxCorridorPyramidStairsTerrainCfg(SubTerrainCfg):
               _BARRIER_COLOR,
             )
 
-    origin = np.array(
-      [terrain_center[0], terrain_center[1], (num_steps + 1) * step_height]
-    )
+    origin = np.array([terrain_center[0], terrain_center[1], center_top_z])
     geometries = [
       TerrainGeometry(geom=geom, color=color)
       for geom, color in zip(boxes, colors, strict=True)
