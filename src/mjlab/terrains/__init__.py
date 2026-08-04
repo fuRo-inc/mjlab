@@ -1,6 +1,9 @@
 from mjlab.terrains.corridor_stairs import (
   BoxCorridorPyramidStairsTerrainCfg as BoxCorridorPyramidStairsTerrainCfg,
 )
+from mjlab.terrains.straight_corridor_stairs import (
+  BoxStraightCorridorStairsTerrainCfg as BoxStraightCorridorStairsTerrainCfg,
+)
 from mjlab.terrains.heightfield_terrains import (
   HfDiscreteObstaclesTerrainCfg as HfDiscreteObstaclesTerrainCfg,
 )
