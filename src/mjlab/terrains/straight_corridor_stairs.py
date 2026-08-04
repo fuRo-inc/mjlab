@@ -8,7 +8,6 @@ import mujoco
 import numpy as np
 
 from mjlab.terrains.terrain_generator import SubTerrainCfg, TerrainGeometry, TerrainOutput
-from mjlab.terrains.utils import make_border
 from mjlab.utils.color import brand_ramp, darken_rgba
 
 _MUJOCO_PURPLE = (0.58, 0.36, 0.90)
@@ -21,13 +20,14 @@ _MIN_FLOOR_HEIGHT = 0.05
 class BoxStraightCorridorStairsTerrainCfg(SubTerrainCfg):
   """One straight staircase with low/high landings and two continuous walls.
 
-  The staircase always rises along local +X. The rest of the terrain cell is a
-  flat low plane. Compared with a four-sided pyramid corridor, this terrain uses
-  only ``num_steps + 4`` collision boxes, plus an optional border.
+  The staircase always rises along local +X. The whole terrain cell is covered
+  by one flat low floor, while ``border_width`` is used only as a placement
+  margin for the staircase and walls. Compared with a four-sided pyramid
+  corridor, this terrain uses only ``num_steps + 4`` collision boxes.
   """
 
   border_width: float = 0.0
-  """Width of the flat border frame around the terrain cell, in meters."""
+  """Placement margin between the staircase assembly and the cell edge."""
 
   step_height_range: tuple[float, float]
   """Minimum and maximum riser height, interpolated by difficulty."""
@@ -130,24 +130,15 @@ class BoxStraightCorridorStairsTerrainCfg(SubTerrainCfg):
       boxes.append(geom)
       colors.append(color)
 
+    # Use one floor geom for the entire cell. Separate border boxes touching the
+    # floor created persistent terrain-terrain contacts in every generated cell.
     floor_color = darken_rgba(brand_ramp(_MUJOCO_PURPLE, 0.0), 0.85)
     floor_height = _MIN_FLOOR_HEIGHT
     add_box(
-      (interior_x, interior_y, floor_height),
+      (self.size[0], self.size[1], floor_height),
       (terrain_center[0], terrain_center[1], -0.5 * floor_height),
       floor_color,
     )
-
-    if self.border_width > 0.0:
-      border_boxes = make_border(
-        body,
-        self.size,
-        (interior_x, interior_y),
-        floor_height,
-        (terrain_center[0], terrain_center[1], -0.5 * floor_height),
-      )
-      boxes.extend(border_boxes)
-      colors.extend([floor_color] * len(border_boxes))
 
     for k in range(num_steps):
       top_z = (k + 1) * step_height
