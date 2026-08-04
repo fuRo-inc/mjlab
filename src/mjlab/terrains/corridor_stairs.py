@@ -3,6 +3,8 @@
 Each stair face contains one central corridor. Two stepped side walls follow the
 climbing direction from the outer edge to the center platform, limiting lateral
 escape and large body-yaw deviations while preserving the ordinary stair treads.
+The center platform perimeter is also guarded, leaving openings only at the four
+corridor entrances.
 """
 
 from __future__ import annotations
@@ -53,6 +55,9 @@ class BoxCorridorPyramidStairsTerrainCfg(SubTerrainCfg):
 
   wall_thickness: float = 0.05
   """Side-wall thickness, in meters."""
+
+  guard_center_platform: bool = True
+  """Close the platform perimeter except at the four corridor openings."""
 
   def function(
     self, difficulty: float, spec: mujoco.MjSpec, rng: np.random.Generator
@@ -162,7 +167,6 @@ class BoxCorridorPyramidStairsTerrainCfg(SubTerrainCfg):
       right_x = terrain_center[0] + 0.5 * terrain_size[0] - nominal_offset
       left_x = terrain_center[0] - 0.5 * terrain_size[0] + nominal_offset
 
-      # Conventional pyramid stair geometry.
       add_box(
         (remaining_x, step_width, box_height),
         (terrain_center[0], top_y, box_z),
@@ -192,8 +196,6 @@ class BoxCorridorPyramidStairsTerrainCfg(SubTerrainCfg):
       tread_top_z = (k + 1) * step_height
       wall_z = tread_top_z + 0.5 * wall_height
 
-      # Top and bottom faces climb along y. Their corridor walls are y-aligned
-      # and remain at fixed x positions over every stair level.
       for x_pos in (
         terrain_center[0] - half_corridor - 0.5 * self.wall_thickness,
         terrain_center[0] + half_corridor + 0.5 * self.wall_thickness,
@@ -209,8 +211,6 @@ class BoxCorridorPyramidStairsTerrainCfg(SubTerrainCfg):
           _BARRIER_COLOR,
         )
 
-      # Left and right faces climb along x. Their corridor walls are x-aligned
-      # and remain at fixed y positions over every stair level.
       for y_pos in (
         terrain_center[1] - half_corridor - 0.5 * self.wall_thickness,
         terrain_center[1] + half_corridor + 0.5 * self.wall_thickness,
@@ -238,6 +238,46 @@ class BoxCorridorPyramidStairsTerrainCfg(SubTerrainCfg):
     )
     center_color = brand_ramp(_MUJOCO_PURPLE, 1.0)
     add_box(center_dims, center_pos, center_color)
+
+    if self.guard_center_platform and wall_height > _MIN_GEOM_SIZE:
+      platform_top_z = terrain_center[2] + (num_steps + 1) * step_height
+      wall_z = platform_top_z + 0.5 * wall_height
+      half_x = 0.5 * center_dims[0]
+      half_y = 0.5 * center_dims[1]
+      segment_x = 0.5 * (center_dims[0] - corridor_width)
+      segment_y = 0.5 * (center_dims[1] - corridor_width)
+
+      if segment_x > _MIN_GEOM_SIZE:
+        x_offset = half_corridor + 0.5 * segment_x
+        for y_pos in (
+          terrain_center[1] - half_y + 0.5 * self.wall_thickness,
+          terrain_center[1] + half_y - 0.5 * self.wall_thickness,
+        ):
+          for x_pos in (
+            terrain_center[0] - x_offset,
+            terrain_center[0] + x_offset,
+          ):
+            add_box(
+              (segment_x, self.wall_thickness, wall_height),
+              (x_pos, y_pos, wall_z),
+              _BARRIER_COLOR,
+            )
+
+      if segment_y > _MIN_GEOM_SIZE:
+        y_offset = half_corridor + 0.5 * segment_y
+        for x_pos in (
+          terrain_center[0] - half_x + 0.5 * self.wall_thickness,
+          terrain_center[0] + half_x - 0.5 * self.wall_thickness,
+        ):
+          for y_pos in (
+            terrain_center[1] - y_offset,
+            terrain_center[1] + y_offset,
+          ):
+            add_box(
+              (self.wall_thickness, segment_y, wall_height),
+              (x_pos, y_pos, wall_z),
+              _BARRIER_COLOR,
+            )
 
     origin = np.array(
       [terrain_center[0], terrain_center[1], (num_steps + 1) * step_height]
