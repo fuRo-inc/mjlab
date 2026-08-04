@@ -24,6 +24,11 @@ class BoxStraightCorridorStairsTerrainCfg(SubTerrainCfg):
   by one flat low floor, while ``border_width`` is used only as a placement
   margin for the staircase and walls. Compared with a four-sided pyramid
   corridor, this terrain uses only ``num_steps + 4`` collision boxes.
+
+  The returned terrain origin is placed at the center of the high landing. Its
+  z coordinate therefore stores the exact generated landing height, including
+  random-mode difficulty and integer stair-count effects. Episode reset code
+  must use this generated origin instead of reconstructing the height.
   """
 
   border_width: float = 0.0
@@ -174,7 +179,7 @@ class BoxStraightCorridorStairsTerrainCfg(SubTerrainCfg):
           _BARRIER_COLOR,
         )
 
-    origin = np.array([terrain_center[0], terrain_center[1], 0.0])
+    origin = np.array([terrain_center[0], terrain_center[1], total_rise])
     geometries = [
       TerrainGeometry(geom=geom, color=color)
       for geom, color in zip(boxes, colors, strict=True)
