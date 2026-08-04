@@ -126,12 +126,16 @@ class BoxStraightCorridorStairsTerrainCfg(SubTerrainCfg):
         type=mujoco.mjtGeom.mjGEOM_BOX,
         size=safe_size,
         pos=pos_xyz,
+        contype=1,
+        conaffinity=0,
       )
       boxes.append(geom)
       colors.append(color)
 
-    # Use one floor geom for the entire cell. Separate border boxes touching the
-    # floor created persistent terrain-terrain contacts in every generated cell.
+    # Terrain geoms need to collide with robot geoms, but not with each other.
+    # Using contype=1 and conaffinity=0 preserves robot-terrain contacts when the
+    # robot uses the default collision mask, while filtering floor-step,
+    # step-step, landing-step, and wall-floor self contacts.
     floor_color = darken_rgba(brand_ramp(_MUJOCO_PURPLE, 0.0), 0.85)
     floor_height = _MIN_FLOOR_HEIGHT
     add_box(
