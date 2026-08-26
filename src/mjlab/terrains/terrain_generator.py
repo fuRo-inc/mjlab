@@ -277,13 +277,12 @@ class TerrainGenerator:
     """Get the world position for a sub-terrain at the given grid indices.
 
     This returns the position of the sub-terrain's corner (not center).
-    The entire grid is centered at the world origin.
+    In curriculum mode, the x axis corresponds to terrain type columns and the
+    y axis corresponds to difficulty rows.
     """
-    # Calculate position relative to grid corner.
     rel_x = row * self.cfg.size[0]
     rel_y = col * self.cfg.size[1]
 
-    # Offset to center the entire grid at world origin.
     grid_offset_x = -self.cfg.num_rows * self.cfg.size[0] * 0.5
     grid_offset_y = -self._num_cols * self.cfg.size[1] * 0.5
 

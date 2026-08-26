@@ -1333,29 +1333,120 @@ def random_yaw_orientation(num: int, device: str) -> torch.Tensor:
     return quat_from_euler_xyz(roll, pitch, yaw)
 
 
-def sample_triangle(lower: float, upper: float, size: int | tuple[int, ...], device: str) -> torch.Tensor:
-    """Randomly samples tensor from a triangular distribution.
+# def sample_triangle(lower: float, upper: float, size: int | tuple[int, ...], device: str) -> torch.Tensor:
+#     """Randomly samples tensor from a triangular distribution.
 
-    Args:
-        lower: The lower range of the sampled tensor.
-        upper: The upper range of the sampled tensor.
-        size: The shape of the tensor.
-        device: Device to create tensor on.
+#     Args:
+#         lower: The lower range of the sampled tensor.
+#         upper: The upper range of the sampled tensor.
+#         size: The shape of the tensor.
+#         device: Device to create tensor on.
 
-    Returns:
-        Sampled tensor. Shape is based on :attr:`size`.
-    """
+#     Returns:
+#         Sampled tensor. Shape is based on :attr:`size`.
+#     """
+#     # convert to tuple
+#     if isinstance(size, int):
+#         size = (size,)
+#     # create random tensor in the range [-1, 1]
+#     r = 2 * torch.rand(*size, device=device) - 1
+#     # convert to triangular distribution
+#     r = torch.where(r < 0.0, -torch.sqrt(-r), torch.sqrt(r)) # 1付近に値が詰まっている.
+#     # rescale back to [0, 1]
+#     r = (r + 1.0) / 2.0
+#     # rescale to range [lower, upper]
+#     return (upper - lower) * r + lower
+
+def sample_triangle(
+    lower: torch.Tensor | float,
+    upper: torch.Tensor | float,
+    size: int | tuple[int, ...],
+    device: str,
+    mode: torch.Tensor | float | None = None, # 最頻値 or 反対
+    distribution: Literal["center", "edge"] = "center",
+) -> torch.Tensor:
     # convert to tuple
     if isinstance(size, int):
         size = (size,)
-    # create random tensor in the range [-1, 1]
-    r = 2 * torch.rand(*size, device=device) - 1
-    # convert to triangular distribution
-    r = torch.where(r < 0.0, -torch.sqrt(-r), torch.sqrt(r))
-    # rescale back to [0, 1]
-    r = (r + 1.0) / 2.0
-    # rescale to range [lower, upper]
-    return (upper - lower) * r + lower
+
+    lower_tensor = torch.as_tensor(
+        lower,
+        dtype=torch.float32,
+        device=device,
+    )
+    upper_tensor = torch.as_tensor(
+        upper,
+        dtype=torch.float32,
+        device=device,
+    )
+
+    if mode is None:
+        mode_tensor = 0.5 * (lower_tensor + upper_tensor) # center
+    else:
+        mode_tensor = torch.as_tensor(
+            mode,
+            dtype=torch.float32,
+            device=device,
+        )
+    
+    if torch.any(upper_tensor <= lower_tensor):
+        raise ValueError("upper must be greater than lower.")
+
+    if torch.any(mode_tensor < lower_tensor) or torch.any(mode_tensor > upper_tensor):
+        raise ValueError("mode must satisfy lower <= mode <= upper.")
+
+    uniform = torch.rand(*size, device=device)
+
+    if distribution == "center":
+        mode_cdf = (
+            (mode_tensor - lower_tensor)
+            / (upper_tensor - lower_tensor)
+        )
+        left = lower_tensor + torch.sqrt(
+            uniform
+            * (upper_tensor - lower_tensor)
+            * (mode_tensor - lower_tensor)
+        )
+        right = upper_tensor - torch.sqrt(
+            (1.0 - uniform)
+            * (upper_tensor - lower_tensor)
+            * (upper_tensor - mode_tensor)
+        )
+        return torch.where(uniform <= mode_cdf, left, right)
+    
+    elif distribution == "edge":
+        split_probability = (
+            (mode_tensor - lower_tensor)
+            / (upper_tensor - lower_tensor)
+        )
+        # 左側に割り当てられた乱数を [0, 1] に正規化
+        left_uniform = uniform / split_probability.clamp_min(
+            torch.finfo(uniform.dtype).eps
+        )
+        # lower 付近が多く、mode に近づくほど少なくなる
+        left = mode_tensor - (mode_tensor - lower_tensor) * torch.sqrt(
+            (1.0 - left_uniform).clamp_min(0.0)
+        )
+        # 右側に割り当てられた乱数を [0, 1] に正規化
+        right_probability = 1.0 - split_probability
+        right_uniform = (uniform - split_probability) / right_probability.clamp_min(
+            torch.finfo(uniform.dtype).eps
+        )
+        # mode 付近が少なく、upper に近づくほど多くなる
+        right = mode_tensor + (upper_tensor - mode_tensor) * torch.sqrt(
+            right_uniform.clamp_min(0.0)
+        )
+        return torch.where(
+            uniform <= split_probability,
+            left,
+            right,
+        )
+
+    else:
+        raise ValueError(
+            f"Unsupported triangle distribution: {distribution!r}. "
+            "Expected 'center' or 'edge'."
+        )
 
 
 def sample_uniform(
@@ -1424,12 +1515,19 @@ def sample_gaussian(
     Returns:
         Sampled tensor.
     """
-    if isinstance(mean, float):
-        if isinstance(size, int):
-            size = (size,)
-        return torch.normal(mean=mean, std=std, size=size).to(device=device)
-    else:
-        return torch.normal(mean=mean, std=std).to(device=device)
+    # if isinstance(mean, float):
+    #     if isinstance(size, int):
+    #         size = (size,)
+    #     return torch.normal(mean=mean, std=std, size=size).to(device=device)
+    # else:
+    #     return torch.normal(mean=mean, std=std).to(device=device)
+    if isinstance(size, int):
+        size = (size,)
+
+    mean = torch.as_tensor(mean, dtype=torch.float, device=device)
+    std = torch.as_tensor(std, dtype=torch.float, device=device)
+
+    return torch.randn(*size, device=device) * std + mean
 
 
 def sample_cylinder(

@@ -40,6 +40,9 @@ Added
 Changed
 ^^^^^^^
 
+- Curriculum terrain grids now place terrain types along the world X axis and
+  difficulty levels along Y, while preserving
+  ``terrain_origins[level, terrain_type]`` indexing.
 - Bumped ``mujoco`` to 3.8 and ``mujoco-warp`` to 3.8.0. The ``multiccd``
   enable flag was removed in mujoco 3.8 (it became default-on), so configs
   that listed ``"multiccd"`` in ``MujocoCfg.enableflags`` need to drop it.

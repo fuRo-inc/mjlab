@@ -120,6 +120,14 @@ class CommandTerm(ManagerTermBase):
         *self.cfg.resampling_time_range
       )
       self._resample_command(env_ids)
+      # print(
+      #       "[DEBUG RESAMPLE]",
+      #       "num_envs =", len(env_ids),
+      #       "min =", env_ids.min().item(),
+      #       "max =", env_ids.max().item(),
+      #       "dtype =", env_ids.dtype,
+      #       "counter_size =", self.command_counter.shape,
+      #   )
       self.command_counter[env_ids] += 1
 
   @abc.abstractmethod
