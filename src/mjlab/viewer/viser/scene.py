@@ -232,10 +232,8 @@ class MjlabViserScene(ViserMujocoScene, DebugVisualizer):
   ) -> None:
     self._sim_model = sim_model
     self._expanded_fields = expanded_fields or set()
-    self._baked_appearance_fields = (
-      self._expanded_fields & _VISER_APPEARANCE_HANDLE_FIELDS
-    )
-    self._baked_appearance_fingerprint: tuple[tuple[str, bytes], ...] | None = None
+    self._baked_visual_fields = self._expanded_fields & _VISER_BAKED_HANDLE_FIELDS
+    self._baked_visual_fingerprint: tuple[tuple[str, bytes], ...] | None = None
     self._use_per_world_mesh_groups = bool(
       self._expanded_fields & _VISER_BAKED_HANDLE_FIELDS
     )
@@ -252,7 +250,7 @@ class MjlabViserScene(ViserMujocoScene, DebugVisualizer):
       )
       disable_model_sameframe_shortcuts(mj_model)
     super().__init__(server, mj_model, num_envs)
-    self._baked_appearance_fingerprint = self._appearance_fingerprint()
+    self._baked_visual_fingerprint = self._visual_fingerprint()
 
     self.debug_visualization_enabled = False
     self.show_all_envs = False
@@ -393,23 +391,23 @@ class MjlabViserScene(ViserMujocoScene, DebugVisualizer):
     sync_model_fields(self.mj_model, self._sim_model, fields, env_idx)
     self._rebuild_visual_handles_if_needed()
 
-  def _appearance_fingerprint(self) -> tuple[tuple[str, bytes], ...] | None:
-    """Return a stable fingerprint for fields baked into Viser mesh handles."""
-    if self._sim_model is None or not self._baked_appearance_fields:
+  def _visual_fingerprint(self) -> tuple[tuple[str, bytes], ...] | None:
+    """Return a fingerprint for geometry and appearance baked into mesh handles."""
+    if self._sim_model is None or not self._baked_visual_fields:
       return None
     parts: list[tuple[str, bytes]] = []
-    for field_name in sorted(self._baked_appearance_fields):
+    for field_name in sorted(self._baked_visual_fields):
       value = getattr(self._sim_model, field_name).cpu().numpy()
       parts.append((field_name, value.tobytes()))
     return tuple(parts)
 
   def _rebuild_visual_handles_if_needed(self) -> None:
-    if self._baked_appearance_fingerprint is None:
+    if self._baked_visual_fingerprint is None:
       return
-    fingerprint = self._appearance_fingerprint()
-    if fingerprint == self._baked_appearance_fingerprint:
+    fingerprint = self._visual_fingerprint()
+    if fingerprint == self._baked_visual_fingerprint:
       return
-    self._baked_appearance_fingerprint = fingerprint
+    self._baked_visual_fingerprint = fingerprint
     self.rebuild_visual_handles()
 
   @staticmethod
