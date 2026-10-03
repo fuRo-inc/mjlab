@@ -163,8 +163,13 @@ class BaseAction(ActionTerm):
       )
 
   def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
-    """Reset raw actions to zero for specified environments."""
+    """Reset raw and processed actions for specified environments."""
     self._raw_actions[env_ids] = 0.0
+
+    if isinstance(self._offset, torch.Tensor):
+      self._processed_actions[env_ids] = self._offset[env_ids]
+    else:
+      self._processed_actions[env_ids] = self._offset
 
 
 ##

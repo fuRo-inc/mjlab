@@ -20,6 +20,24 @@ def dump_yaml(filename: Path, data: Dict, sort_keys: bool = False) -> None:
     yaml.dump(data, f, sort_keys=sort_keys)
 
 
+def update_assets(assets: Dict[str, bytes], asset_dir: Path, meshdir: str) -> None:
+  """Populate an asset dict with files rooted at ``asset_dir``.
+
+  Keys are written using the MuJoCo ``meshdir`` prefix so they match XML
+  ``file=...`` references after the spec is compiled.
+  """
+  if not asset_dir.exists():
+    raise FileNotFoundError(f"Asset directory does not exist: {asset_dir}")
+
+  mesh_prefix = meshdir.strip().strip("/").replace("\\", "/")
+  for file_path in sorted(asset_dir.rglob("*")):
+    if not file_path.is_file():
+      continue
+    rel_path = file_path.relative_to(asset_dir).as_posix()
+    asset_key = f"{mesh_prefix}/{rel_path}" if mesh_prefix else rel_path
+    assets[asset_key] = file_path.read_bytes()
+
+
 def get_checkpoint_path(
   log_path: Path,
   run_dir: str = ".*",

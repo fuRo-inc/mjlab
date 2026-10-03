@@ -1,3 +1,9 @@
+from mjlab.terrains.corridor_stairs import (
+  BoxCorridorPyramidStairsTerrainCfg as BoxCorridorPyramidStairsTerrainCfg,
+)
+from mjlab.terrains.straight_corridor_stairs import (
+  BoxStraightCorridorStairsTerrainCfg as BoxStraightCorridorStairsTerrainCfg,
+)
 from mjlab.terrains.heightfield_terrains import (
   HfDiscreteObstaclesTerrainCfg as HfDiscreteObstaclesTerrainCfg,
 )
@@ -11,6 +17,9 @@ from mjlab.terrains.heightfield_terrains import (
   HfRandomUniformTerrainCfg as HfRandomUniformTerrainCfg,
 )
 from mjlab.terrains.heightfield_terrains import HfWaveTerrainCfg as HfWaveTerrainCfg
+from mjlab.terrains.primitive_terrains import (
+  BoxAlternatingPyramidStairsTerrainCfg as BoxAlternatingPyramidStairsTerrainCfg,
+)
 from mjlab.terrains.primitive_terrains import BoxFlatTerrainCfg as BoxFlatTerrainCfg
 from mjlab.terrains.primitive_terrains import (
   BoxInvertedPyramidStairsTerrainCfg as BoxInvertedPyramidStairsTerrainCfg,
@@ -50,3 +59,6 @@ from mjlab.terrains.terrain_generator import (
 from mjlab.terrains.terrain_generator import SubTerrainCfg as SubTerrainCfg
 from mjlab.terrains.terrain_generator import TerrainGenerator as TerrainGenerator
 from mjlab.terrains.terrain_generator import TerrainGeneratorCfg as TerrainGeneratorCfg
+
+# Install actual generated terrain-type tracking for both curriculum and random modes.
+from mjlab.terrains import terrain_type_tracking as terrain_type_tracking
