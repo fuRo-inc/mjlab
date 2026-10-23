@@ -1799,6 +1799,14 @@ class BoxAlternatingPyramidStairsTerrainCfg(SubTerrainCfg):
   post_step_width: float = 1.0
   """Width/depth of the lower flat surface after descending the step."""
 
+  min_lower_ring_width: float = 0.15
+  """Minimum clear radial width of a lower ring, including at the border.
+
+  A smaller terminal remainder is absorbed into the preceding upper surface.
+  This does not constrain the sampled upper step width. ``post_step_width``
+  must be at least this minimum.
+  """
+
   platform_width: float = 1.0
   """Side length of the flat square platform at the terrain center, in meters."""
 
@@ -1836,6 +1844,11 @@ class BoxAlternatingPyramidStairsTerrainCfg(SubTerrainCfg):
 
     if self.post_step_width <= 0.0:
       raise ValueError(f"post_step_width must be positive. Got: {self.post_step_width}")
+
+    if not np.isfinite(self.min_lower_ring_width) or self.min_lower_ring_width <= 0.0:
+      raise ValueError("min_lower_ring_width must be finite and positive")
+    if self.post_step_width < self.min_lower_ring_width:
+      raise ValueError("post_step_width must be >= min_lower_ring_width")
 
     if self.platform_width <= 0.0:
       raise ValueError(f"platform_width must be positive. Got: {self.platform_width}")
@@ -1976,12 +1989,21 @@ class BoxAlternatingPyramidStairsTerrainCfg(SubTerrainCfg):
     # ----------------------------------------------------------------------
     # Center platform at z=0
     # ----------------------------------------------------------------------
+    current_inner_x = self.platform_width
+    current_inner_y = self.platform_width
+    if min(
+      (inner_size_x - current_inner_x) / 2.0,
+      (inner_size_y - current_inner_y) / 2.0,
+    ) < self.min_lower_ring_width:
+      # Absorb even a sub-micrometer first remainder into the platform itself;
+      # creating a separate tiny strip would hit the geom-size clipping below.
+      current_inner_x, current_inner_y = inner_size_x, inner_size_y
     platform_rgba = brand_ramp(_MUJOCO_BLUE, 0.5)
     _add_solid_box(
       center_x=terrain_center[0],
       center_y=terrain_center[1],
-      size_x=self.platform_width,
-      size_y=self.platform_width,
+      size_x=current_inner_x,
+      size_y=current_inner_y,
       top_z=0.0,
       rgba=platform_rgba,
     )
@@ -1993,8 +2015,6 @@ class BoxAlternatingPyramidStairsTerrainCfg(SubTerrainCfg):
     #   3) lower flat  (-step_height) with fixed post_step_width
     #   4) upper flat  (0.0)         with sampled step_width
     # ----------------------------------------------------------------------
-    current_inner_x = self.platform_width
-    current_inner_y = self.platform_width
     is_lower_flat_ring = True
     ring_idx = 0
 
@@ -2013,6 +2033,29 @@ class BoxAlternatingPyramidStairsTerrainCfg(SubTerrainCfg):
 
       next_outer_x = min(current_inner_x + 2.0 * ring_width, inner_size_x)
       next_outer_y = min(current_inner_y + 2.0 * ring_width, inner_size_y)
+
+      remaining_x = (inner_size_x - current_inner_x) / 2.0
+      remaining_y = (inner_size_y - current_inner_y) / 2.0
+      if is_lower_flat_ring and min(remaining_x, remaining_y) < self.min_lower_ring_width:
+        # Even the first lower ring may be clipped too narrowly on a small
+        # cell. Fill at platform/upper height instead of cutting a thin groove.
+        top_z = 0.0
+        next_outer_x, next_outer_y = inner_size_x, inner_size_y
+      elif (
+        next_outer_x >= inner_size_x - 1.0e-6
+        or next_outer_y >= inner_size_y - 1.0e-6
+        or (
+          not is_lower_flat_ring
+          and min(
+            (inner_size_x - next_outer_x) / 2.0,
+            (inner_size_y - next_outer_y) / 2.0,
+          ) < self.min_lower_ring_width
+        )
+      ):
+        # Extend the final surface to both inner-border edges. In particular,
+        # an upper ring absorbs a remainder too narrow for the next lower ring.
+        # Finishing both axes also fully covers rectangular terrain cells.
+        next_outer_x, next_outer_y = inner_size_x, inner_size_y
 
       if next_outer_x <= current_inner_x + 1.0e-6:
         break
