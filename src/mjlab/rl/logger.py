@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pathlib
 import statistics
 import time
 
@@ -17,7 +16,13 @@ class MjlabLogger(Logger):
 
   def __init__(self, *args, env=None, **kwargs) -> None:
     super().__init__(*args, **kwargs)
+    self.cfg["logger"] = "tensorboard"
     self.env = env
+
+  def init_logging_writer(self) -> None:
+    """Ignore legacy logging settings even if a caller restores old configuration."""
+    self.cfg["logger"] = "tensorboard"
+    super().init_logging_writer()
 
   @staticmethod
   def _get_attr_any(env_obj, name: str, default=None):
@@ -227,13 +232,12 @@ class MjlabLogger(Logger):
         self.writer.add_scalar("Rnd/weight", rnd_weight, it)  # type: ignore
       self.writer.add_scalar("Train/mean_reward", statistics.mean(self.rewbuffer), it)
       self.writer.add_scalar("Train/mean_episode_length", statistics.mean(self.lenbuffer), it)
-      if self.logger_type != "WandbLogWriter":
-        self.writer.add_scalar("Train/mean_reward/time", statistics.mean(self.rewbuffer), int(self.tot_time))
-        self.writer.add_scalar(
-          "Train/mean_episode_length/time",
-          statistics.mean(self.lenbuffer),
-          int(self.tot_time),
-        )
+      self.writer.add_scalar("Train/mean_reward/time", statistics.mean(self.rewbuffer), int(self.tot_time))
+      self.writer.add_scalar(
+        "Train/mean_episode_length/time",
+        statistics.mean(self.lenbuffer),
+        int(self.tot_time),
+      )
 
     log_string = f"""{"#" * width}\n"""
     log_string += f"""\033[1m{f" Learning iteration {it}/{total_it} ".center(width)}\033[0m \n\n"""
@@ -278,9 +282,5 @@ class MjlabLogger(Logger):
       f"""{"ETA:":>{pad}} {time.strftime("%H:%M:%S", time.gmtime(eta))}\n"""
     )
     print(log_string)
-
-    if self.logger_type == "WandbLogWriter":
-      for video in pathlib.Path(self.log_dir).rglob("*.mp4"):  # type: ignore
-        self.writer.save_video(video, it)  # type: ignore
 
     self.ep_extras.clear()

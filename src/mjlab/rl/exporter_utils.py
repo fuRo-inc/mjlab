@@ -38,7 +38,7 @@ def get_base_metadata(
 
   Args:
     env: The RL environment.
-    run_path: W&B run path or other identifier.
+    run_path: Local run directory name or other identifier.
 
   Returns:
     Dictionary of metadata fields that are common across all tasks.

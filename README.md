@@ -60,7 +60,7 @@ See the [Distributed Training guide](https://mujocolab.github.io/mjlab/main/sour
 Evaluate a policy while training (fetches latest checkpoint from Weights & Biases):
 
 ```bash
-uv run play Mjlab-Velocity-Flat-Unitree-G1 --wandb-run-path your-org/mjlab/run-id
+uv run play Mjlab-Velocity-Flat-Unitree-G1 --checkpoint-file logs/rsl_rl/experiment/run/model_1000.pt
 ```
 
 ### 2. Motion Imitation
@@ -68,8 +68,8 @@ uv run play Mjlab-Velocity-Flat-Unitree-G1 --wandb-run-path your-org/mjlab/run-i
 Train a humanoid to mimic reference motions. See the [motion imitation guide](https://mujocolab.github.io/mjlab/main/source/training/motion_imitation.html) for preprocessing setup.
 
 ```bash
-uv run train Mjlab-Tracking-Flat-Unitree-G1 --registry-name your-org/motions/motion-name --env.scene.num-envs 4096
-uv run play Mjlab-Tracking-Flat-Unitree-G1 --wandb-run-path your-org/mjlab/run-id
+uv run train Mjlab-Tracking-Flat-Unitree-G1 --motion-file /path/to/motion.npz --env.scene.num-envs 4096
+uv run play Mjlab-Tracking-Flat-Unitree-G1 --checkpoint-file logs/rsl_rl/experiment/run/model_1000.pt
 ```
 
 ### 3. Sanity-check with Dummy Agents
@@ -81,7 +81,7 @@ uv run play Mjlab-Your-Task-Id --agent zero  # Sends zero actions
 uv run play Mjlab-Your-Task-Id --agent random  # Sends uniform random actions
 ```
 
-When running motion-tracking tasks, add `--registry-name your-org/motions/motion-name` to the command.
+When running motion-tracking tasks, add `--motion-file /path/to/motion.npz` to the command.
 
 
 ## Documentation

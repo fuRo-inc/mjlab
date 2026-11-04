@@ -5,6 +5,12 @@ Changelog
 Upcoming version (not yet released)
 -----------------------------------
 
+Changed
+^^^^^^^
+
+- Training and playback use local checkpoints and TensorBoard only. Legacy logger
+  settings cannot enable external uploads; ONNX exports remain local.
+
 Version 1.6.0 (August 8, 2026)
 ------------------------------
 

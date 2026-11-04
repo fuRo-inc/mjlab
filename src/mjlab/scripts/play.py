@@ -4,7 +4,6 @@ import os
 import sys
 import time as _time
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -16,27 +15,16 @@ from mjlab.rl import MjlabOnPolicyRunner, RslRlVecEnvWrapper
 from mjlab.scripts._cli import maybe_print_top_level_help
 from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg, load_runner_cls
 from mjlab.tasks.tracking.mdp import MotionCommandCfg
-from mjlab.utils.os import get_wandb_checkpoint_path
+from mjlab.utils.os import get_checkpoint_path
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.utils.wrappers import VideoRecorder
 from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
 from mjlab.viewer.viser.viewer import CheckpointManager, format_time_ago
 
 
-def _parse_wandb_dt(value: str | datetime) -> datetime:
-  """Parse a W&B datetime string (or pass through a datetime object)."""
-  if isinstance(value, str):
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
-  return value
-
-
 @dataclass(frozen=True)
 class PlayConfig:
   agent: Literal["zero", "random", "trained"] = "trained"
-  registry_name: str | None = None
-  wandb_run_path: str | None = None
-  wandb_checkpoint_name: str | None = None
-  """Optional checkpoint name within the W&B run to load (e.g. 'model_4000.pt')."""
   checkpoint_file: str | None = None
   motion_file: str | None = None
   num_envs: int | None = None
@@ -87,47 +75,10 @@ def run_play(task_id: str, cfg: PlayConfig):
     motion_cmd = env_cfg.commands["motion"]
     assert isinstance(motion_cmd, MotionCommandCfg)
 
-    # Check for local motion file first (works for both dummy and trained modes).
-    if cfg.motion_file is not None and Path(cfg.motion_file).exists():
-      print(f"[INFO]: Using local motion file: {cfg.motion_file}")
-      motion_cmd.motion_file = cfg.motion_file
-    elif DUMMY_MODE:
-      if not cfg.registry_name:
-        raise ValueError(
-          "Tracking tasks require either:\n"
-          "  --motion-file /path/to/motion.npz (local file)\n"
-          "  --registry-name your-org/motions/motion-name (download from WandB)"
-        )
-      # Check if the registry name includes alias, if not, append ":latest".
-      registry_name = cfg.registry_name
-      if ":" not in registry_name:
-        registry_name = registry_name + ":latest"
-      import wandb
-
-      api = wandb.Api()
-      artifact = api.artifact(registry_name)
-      motion_cmd.motion_file = str(Path(artifact.download()) / "motion.npz")
-    else:
-      if cfg.motion_file is not None:
-        print(f"[INFO]: Using motion file from CLI: {cfg.motion_file}")
-        motion_cmd.motion_file = cfg.motion_file
-      else:
-        import wandb
-
-        api = wandb.Api()
-        if cfg.wandb_run_path is None and cfg.checkpoint_file is not None:
-          raise ValueError(
-            "Tracking tasks require `motion_file` when using `checkpoint_file`, "
-            "or provide `wandb_run_path` so the motion artifact can be resolved."
-          )
-        if cfg.wandb_run_path is not None:
-          wandb_run = api.run(str(cfg.wandb_run_path))
-          art = next(
-            (a for a in wandb_run.used_artifacts() if a.type == "motions"), None
-          )
-          if art is None:
-            raise RuntimeError("No motion artifact found in the run.")
-          motion_cmd.motion_file = str(Path(art.download()) / "motion.npz")
+    motion_path = Path(cfg.motion_file or motion_cmd.motion_file or "").expanduser()
+    if not motion_path.is_file():
+      raise ValueError("Tracking requires --motion-file /path/to/motion.npz")
+    motion_cmd.motion_file = str(motion_path.resolve())
 
   log_dir: Path | None = None
   resume_path: Path | None = None
@@ -139,19 +90,8 @@ def run_play(task_id: str, cfg: PlayConfig):
         raise FileNotFoundError(f"Checkpoint file not found: {resume_path}")
       print(f"[INFO]: Loading checkpoint: {resume_path.name}")
     else:
-      if cfg.wandb_run_path is None:
-        raise ValueError(
-          "`wandb_run_path` is required when `checkpoint_file` is not provided."
-        )
-      resume_path, was_cached = get_wandb_checkpoint_path(
-        log_root_path, Path(cfg.wandb_run_path), cfg.wandb_checkpoint_name
-      )
-      # Extract run_id and checkpoint name from path for display.
-      run_id = resume_path.parent.name
-      checkpoint_name = resume_path.name
-      cached_str = "cached" if was_cached else "downloaded"
-      print(
-        f"[INFO]: Loading checkpoint: {checkpoint_name} (run: {run_id}, {cached_str})"
+      resume_path = get_checkpoint_path(
+        log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint
       )
     log_dir = resume_path.parent
 
@@ -221,63 +161,26 @@ def run_play(task_id: str, cfg: PlayConfig):
       )
       return _ckpt_runner.get_inference_policy(device=device)
 
-    if cfg.wandb_run_path is None:
-      ckpt_dir = resume_path.parent
+    ckpt_dir = resume_path.parent
 
-      def fetch_available_local() -> list[tuple[str, str]]:
-        now = _time.time()
-        entries: list[tuple[str, str, int]] = []
-        for f in sorted(ckpt_dir.glob("*.pt")):
-          try:
-            step = int(f.stem.split("_")[1])
-          except (IndexError, ValueError):
-            step = 0
-          ago = format_time_ago(int(now - f.stat().st_mtime))
-          entries.append((f.name, ago, step))
-        entries.sort(key=lambda x: x[2])
-        return [(name, t) for name, t, _ in entries]
+    def fetch_available_local() -> list[tuple[str, str]]:
+      now = _time.time()
+      entries: list[tuple[str, str, int]] = []
+      for f in sorted(ckpt_dir.glob("*.pt")):
+        try:
+          step = int(f.stem.split("_")[1])
+        except (IndexError, ValueError):
+          step = 0
+        ago = format_time_ago(int(now - f.stat().st_mtime))
+        entries.append((f.name, ago, step))
+      entries.sort(key=lambda x: x[2])
+      return [(name, t) for name, t, _ in entries]
 
-      ckpt_manager = CheckpointManager(
-        current_name=resume_path.name,
-        fetch_available=fetch_available_local,
-        load_checkpoint=lambda name: _reload_policy(str(ckpt_dir / name)),
-      )
-    else:
-      import wandb
-
-      api = wandb.Api()
-      run_path = str(cfg.wandb_run_path)
-      wandb_run = api.run(run_path)
-      _log_root = log_root_path  # pyright: ignore[reportPossiblyUnboundVariable]
-
-      def fetch_available_wandb() -> list[tuple[str, str]]:
-        wandb_run.load()
-        now = datetime.now(tz=timezone.utc)
-        entries: list[tuple[str, str, int]] = []
-        for f in wandb_run.files():
-          if not f.name.endswith(".pt"):
-            continue
-          try:
-            step = int(f.name.split("_")[1].split(".")[0])
-          except (IndexError, ValueError):
-            step = 0
-          ago = format_time_ago(
-            int((now - _parse_wandb_dt(f.updated_at)).total_seconds())
-          )
-          entries.append((f.name, ago, step))
-        entries.sort(key=lambda x: x[2])
-        return [(name, t) for name, t, _ in entries]
-
-      ckpt_manager = CheckpointManager(
-        current_name=resume_path.name,
-        fetch_available=fetch_available_wandb,
-        load_checkpoint=lambda name: _reload_policy(
-          str(get_wandb_checkpoint_path(_log_root, Path(run_path), name)[0])
-        ),
-        run_name=_parse_wandb_dt(wandb_run.created_at).strftime("%Y-%m-%d_%H-%M-%S"),
-        run_url=wandb_run.url,
-        run_status=wandb_run.state,
-      )
+    ckpt_manager = CheckpointManager(
+      current_name=resume_path.name,
+      fetch_available=fetch_available_local,
+      load_checkpoint=lambda name: _reload_policy(str(ckpt_dir / name)),
+    )
 
   # Handle "auto" viewer selection.
   if cfg.viewer == "auto":

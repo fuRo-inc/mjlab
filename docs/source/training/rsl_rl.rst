@@ -116,10 +116,6 @@ Some commonly used top-level flags:
 
 .. code-block:: bash
 
-    # From W&B.
-    uv run play Mjlab-Velocity-Flat-Unitree-G1 \
-        --wandb-run-path your-entity/mjlab/run-id
-
     # From a local checkpoint.
     uv run play Mjlab-Velocity-Flat-Unitree-G1 \
         --checkpoint-file logs/rsl_rl/g1_velocity/2025-01-27_14-30-00/model_1000.pt
@@ -247,14 +243,15 @@ from the checkpoint. If you are resuming from iteration 11500 with
 ``--agent.max-iterations 300`` (the default), training will run iterations
 11500 through 11800. Set this to the number of new iterations you want.
 
-To resume from a W&B run:
+To resume a selected local run:
 
 .. code-block:: bash
 
     uv run train Mjlab-Velocity-Flat-Unitree-G1 \
-        --num-envs 4096 \
+        --env.scene.num-envs 4096 \
         --agent.resume True \
-        --wandb-run-path your-entity/mjlab/run-id
+        --agent.load-run 2025-01-27_14-30-00 \
+        --agent.load-checkpoint model_1000.pt
 
 
 Citation

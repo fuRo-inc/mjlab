@@ -6,16 +6,6 @@ Motion Imitation
 mjlab can train humanoid policies to imitate reference motions. This page
 covers motion data preprocessing and training.
 
-WandB registry setup
---------------------
-
-mjlab uses `Weights & Biases <https://wandb.ai/>`_ to store and load
-reference motions. Before preprocessing any motions, create a WandB registry
-by following the
-`BeyondMimic instructions <https://github.com/HybridRobotics/whole_body_tracking/blob/main/README.md#motion-preprocessing--registry-setup>`_
-(only the registry creation step; skip the ``csv_to_npz.py`` command shown
-there).
-
 Motion preprocessing
 --------------------
 
@@ -35,7 +25,8 @@ Convert a CSV to the NPZ format mjlab expects:
        --render True
 
 The script plays the motion through MuJoCo Warp, computes forward kinematics
-for every body, and uploads the resulting NPZ to your WandB registry.
+for every body, and saves the resulting NPZ locally at ``--output-name``. With rendering
+enabled, the MP4 is saved beside it.
 
 .. warning::
 
@@ -53,7 +44,7 @@ Training
 .. code-block:: bash
 
    uv run train Mjlab-Tracking-Flat-Unitree-G1 \
-       --registry-name your-org/motions/motion-name \
+       --motion-file /path/to/motion.npz \
        --env.scene.num-envs 4096
 
 Evaluation
@@ -62,4 +53,4 @@ Evaluation
 .. code-block:: bash
 
    uv run play Mjlab-Tracking-Flat-Unitree-G1 \
-       --wandb-run-path your-org/mjlab/run-id
+       --checkpoint-file logs/rsl_rl/experiment/run/model_1000.pt
