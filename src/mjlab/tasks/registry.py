@@ -1,5 +1,6 @@
 """Task registry system for managing environment registration and creation."""
 
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
 
@@ -9,7 +10,7 @@ from mjlab.rl import RslRlBaseRunnerCfg
 
 @dataclass
 class _TaskCfg:
-  env_cfg: ManagerBasedRlEnvCfg
+  env_cfg: ManagerBasedRlEnvCfg | Callable[[], ManagerBasedRlEnvCfg]
   play_env_cfg: ManagerBasedRlEnvCfg
   rl_cfg: RslRlBaseRunnerCfg
   runner_cls: type | None
@@ -21,7 +22,7 @@ _REGISTRY: dict[str, _TaskCfg] = {}
 
 def register_mjlab_task(
   task_id: str,
-  env_cfg: ManagerBasedRlEnvCfg,
+  env_cfg: ManagerBasedRlEnvCfg | Callable[[], ManagerBasedRlEnvCfg],
   play_env_cfg: ManagerBasedRlEnvCfg,
   rl_cfg: RslRlBaseRunnerCfg,
   runner_cls: type | None = None,
@@ -30,7 +31,7 @@ def register_mjlab_task(
 
   Args:
     task_id: Unique task identifier (e.g., "Mjlab-Velocity-Rough-Unitree-Go1").
-    env_cfg: Environment configuration used for training.
+    env_cfg: Training configuration or a factory returning a fresh configuration.
     play_env_cfg: Environment configuration in "play" mode.
     rl_cfg: RL runner configuration.
     runner_cls: Optional custom runner class. If None, uses OnPolicyRunner.
@@ -48,17 +49,17 @@ def list_tasks() -> list[str]:
 def load_env_cfg(task_name: str, play: bool = False) -> ManagerBasedRlEnvCfg:
   """Load environment configuration for a task.
 
-  Returns a deep copy to prevent mutation of the registered config.
+  Returns a fresh configuration from the factory or a copy of the template.
   """
-  return deepcopy(
-    _REGISTRY[task_name].env_cfg if not play else _REGISTRY[task_name].play_env_cfg
-  )
+  task = _REGISTRY[task_name]
+  config = task.play_env_cfg if play else task.env_cfg
+  return config() if callable(config) else deepcopy(config)
 
 
 def load_rl_cfg(task_name: str) -> RslRlBaseRunnerCfg:
   """Load RL configuration for a task.
 
-  Returns a deep copy to prevent mutation of the registered config.
+  Returns a fresh configuration from the factory or a copy of the template.
   """
   return deepcopy(_REGISTRY[task_name].rl_cfg)
 
