@@ -14,6 +14,7 @@ class _TaskCfg:
   play_env_cfg: ManagerBasedRlEnvCfg
   rl_cfg: RslRlBaseRunnerCfg
   runner_cls: type | None
+  configure_env: Callable[[ManagerBasedRlEnvCfg], ManagerBasedRlEnvCfg] | None
 
 
 # Private module-level registry: task_id -> task config.
@@ -26,6 +27,7 @@ def register_mjlab_task(
   play_env_cfg: ManagerBasedRlEnvCfg,
   rl_cfg: RslRlBaseRunnerCfg,
   runner_cls: type | None = None,
+  configure_env: Callable[[ManagerBasedRlEnvCfg], ManagerBasedRlEnvCfg] | None = None,
 ) -> None:
   """Register an environment task.
 
@@ -34,11 +36,12 @@ def register_mjlab_task(
     env_cfg: Training configuration or a factory returning a fresh configuration.
     play_env_cfg: Environment configuration in "play" mode.
     rl_cfg: RL runner configuration.
+    configure_env: Optional transformation applied to each freshly loaded environment config.
     runner_cls: Optional custom runner class. If None, uses OnPolicyRunner.
   """
   if task_id in _REGISTRY:
     raise ValueError(f"Task '{task_id}' is already registered")
-  _REGISTRY[task_id] = _TaskCfg(env_cfg, play_env_cfg, rl_cfg, runner_cls)
+  _REGISTRY[task_id] = _TaskCfg(env_cfg, play_env_cfg, rl_cfg, runner_cls, configure_env)
 
 
 def list_tasks() -> list[str]:
@@ -46,14 +49,19 @@ def list_tasks() -> list[str]:
   return sorted(_REGISTRY.keys())
 
 
-def load_env_cfg(task_name: str, play: bool = False) -> ManagerBasedRlEnvCfg:
+def load_env_cfg(
+  task_name: str, play: bool = False, *, apply_overrides: bool = True
+) -> ManagerBasedRlEnvCfg:
   """Load environment configuration for a task.
 
   Returns a fresh configuration from the factory or a copy of the template.
   """
   task = _REGISTRY[task_name]
   config = task.play_env_cfg if play else task.env_cfg
-  return config() if callable(config) else deepcopy(config)
+  result = config() if callable(config) else deepcopy(config)
+  if apply_overrides and task.configure_env is not None:
+    result = task.configure_env(result)
+  return result
 
 
 def load_rl_cfg(task_name: str) -> RslRlBaseRunnerCfg:

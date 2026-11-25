@@ -175,6 +175,8 @@ class SimulationCfg:
   """Deprecated and ignored. Parallel linesearch was removed in MuJoCo Warp 3.10."""
   mujoco: MujocoCfg = field(default_factory=MujocoCfg)
   nan_guard: NanGuardCfg = field(default_factory=NanGuardCfg)
+  per_world_fields: tuple[str, ...] = ()
+  """Model fields expanded before the first graph capture."""
 
   def __post_init__(self) -> None:
     if self.ls_parallel is not None:
@@ -335,6 +337,14 @@ class Simulation:
     self._reset_mask_wp = wp.zeros(self.num_envs, dtype=bool)
     self._reset_mask = TorchArray(self._reset_mask_wp)
 
+    fields = self.cfg.per_world_fields
+    if fields:
+      invalid_fields = [name for name in fields if not hasattr(self._mj_model, name)]
+      if invalid_fields:
+        raise ValueError(f"Fields not found in model: {invalid_fields}")
+      expand_model_fields(self._wp_model, self.num_envs, list(fields))
+      self._expanded_fields.update(fields)
+
     self._model_bridge = WarpBridge(self._wp_model, nworld=self.num_envs)
     self._data_bridge = WarpBridge(self._wp_data)
     self._sensor_context: SensorContext | None = None
@@ -433,6 +443,7 @@ class Simulation:
 
   def expand_model_fields(self, fields: tuple[str, ...]) -> None:
     """Expand model fields to support per-environment parameters."""
+    fields = tuple(name for name in fields if name not in self._expanded_fields)
     if not fields:
       return
 

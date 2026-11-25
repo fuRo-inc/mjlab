@@ -4,6 +4,7 @@ Provides automatic wrapping of Warp arrays as PyTorch-compatible objects while
 preserving shared memory and CUDA graph compatibility.
 """
 
+from contextlib import contextmanager
 from typing import Any, Dict, Generic, Optional, Tuple, TypeVar
 
 import torch
@@ -197,9 +198,13 @@ class WarpBridge(Generic[T]):
     object.__setattr__(self, "_struct", struct)
     object.__setattr__(self, "_wrapped_cache", {})
     object.__setattr__(self, "_nworld", nworld)
+    object.__setattr__(self, "_array_overrides", {})
 
   def __getattr__(self, name: str) -> Any:
     """Get attribute from the wrapped data, wrapping Warp arrays as TorchArray."""
+    if name in self._array_overrides:
+      return self._array_overrides[name]
+
     # Check cache first to avoid recreating wrappers.
     if name in self._wrapped_cache:
       return self._wrapped_cache[name]
@@ -236,6 +241,17 @@ class WarpBridge(Generic[T]):
   def struct(self) -> T:
     """Access the underlying wrapped struct."""
     return self._struct
+
+  @contextmanager
+  def override_array(self, name: str, tensor: torch.Tensor):
+    """Route scoped Python accesses to a tensor without replacing a Warp array."""
+    if name in self._array_overrides:
+      raise RuntimeError(f"An override for {name} is already active")
+    self._array_overrides[name] = tensor
+    try:
+      yield
+    finally:
+      del self._array_overrides[name]
 
   def clear_cache(self) -> None:
     """Clear the wrapped cache to force re-wrapping of arrays.
