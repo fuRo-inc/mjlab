@@ -10,6 +10,14 @@ Changed
 
 - Training and playback use local checkpoints and TensorBoard only. Legacy logger
   settings cannot enable external uploads; ONNX exports remain local.
+- ``Simulation.recompute_constants`` replays a captured CUDA graph instead of
+  launching every ``set_const`` kernel from Python on each call.
+
+Added
+^^^^^
+
+- ``Simulation.forward_kinematics`` refreshes poses and body velocities only,
+  for callers that run a full ``forward()`` again before reading dynamics.
 
 Version 1.6.0 (August 8, 2026)
 ------------------------------

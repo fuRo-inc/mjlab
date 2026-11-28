@@ -372,6 +372,9 @@ class Simulation:
     self.forward_graph = None
     self.reset_graph = None
     self.sense_graph = None
+    self._kinematics_graph: wp.Graph | None = None
+    # Captured lazily: most runs use a single recompute level, if any.
+    self._recompute_graphs: dict[RecomputeLevel, wp.Graph] = {}
     if self.use_cuda_graph:
       with _suspend_gc(), wp.ScopedDevice(self.wp_device):
         with wp.ScopedCapture() as capture:
@@ -491,7 +494,18 @@ class Simulation:
     """
     fn = getattr(mjwarp, level.name)
     with wp.ScopedDevice(self.wp_device):
-      fn(self._wp_model, self._wp_data)
+      if not self.use_cuda_graph:
+        fn(self._wp_model, self._wp_data)
+        return
+      # These routines launch hundreds of small kernels from Python (one solve
+      # per DoF). With reset-mode randomization they run nearly every env step,
+      # so replay them as a single CUDA graph like step/forward/reset.
+      graph = self._recompute_graphs.get(level)
+      if graph is None:
+        with _suspend_gc(), wp.ScopedCapture() as capture:
+          fn(self._wp_model, self._wp_data)
+        graph = self._recompute_graphs[level] = capture.graph
+      wp.capture_launch(graph)
 
   def forward(self) -> None:
     with wp.ScopedDevice(self.wp_device):
@@ -499,6 +513,28 @@ class Simulation:
         wp.capture_launch(self.forward_graph)
       else:
         mjwarp.forward(self.wp_model, self.wp_data)
+
+  def forward_kinematics(self) -> None:
+    """Refresh poses and body velocities without collisions or dynamics.
+
+    Runs only the kinematic stages of ``forward()``: body, site, and geom frames,
+    centers of mass, and ``cvel``. Contacts, constraints, forces, accelerations,
+    and ``sensordata`` keep their previous values. Use this only when a full
+    ``forward()`` follows before anything reads those.
+    """
+    with wp.ScopedDevice(self.wp_device):
+      if not self.use_cuda_graph:
+        self._kinematics_kernel()
+        return
+      if self._kinematics_graph is None:
+        with _suspend_gc(), wp.ScopedCapture() as capture:
+          self._kinematics_kernel()
+        self._kinematics_graph = capture.graph
+      wp.capture_launch(self._kinematics_graph)
+
+  def _kinematics_kernel(self) -> None:
+    mjwarp.fwd_kinematics(self.wp_model, self.wp_data)
+    mjwarp.com_vel(self.wp_model, self.wp_data)
 
   def step(self) -> None:
     with wp.ScopedDevice(self.wp_device):
