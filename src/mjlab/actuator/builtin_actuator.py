@@ -47,6 +47,8 @@ class BuiltinPositionActuatorCfg(ActuatorCfg):
   """PD derivative gain."""
   effort_limit: float | None = None
   """Maximum actuator force/torque. If None, no limit is applied."""
+  effort_limit_by_target: dict[str, float] | None = None
+  """Exact target-name overrides of effort_limit, in actuator force units."""
 
   def __post_init__(self) -> None:
     super().__post_init__()
@@ -82,7 +84,9 @@ class BuiltinPositionActuator(Actuator[BuiltinPositionActuatorCfg]):
         target_name,
         stiffness=self.cfg.stiffness,
         damping=self.cfg.damping,
-        effort_limit=self.cfg.effort_limit,
+        effort_limit=(self.cfg.effort_limit_by_target or {}).get(
+          target_name, self.cfg.effort_limit
+        ),
         armature=self.cfg.armature,
         frictionloss=self.cfg.frictionloss,
         viscous_damping=self.cfg.viscous_damping,

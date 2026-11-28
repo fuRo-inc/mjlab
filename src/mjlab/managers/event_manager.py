@@ -276,7 +276,7 @@ class EventManager(ManagerBase):
             lower, upper = term_cfg.interval_range_s
             sampled_interval = torch.rand(1) * (upper - lower) + lower
             self._interval_term_time_left[index][:] = sampled_interval
-            term_cfg.func(self._env, None, **term_cfg.params)
+            self._invoke(term_cfg, None)
             fired = True
         else:
           valid_env_ids = (time_left < 1e-6).nonzero().flatten()
@@ -288,10 +288,10 @@ class EventManager(ManagerBase):
               + lower
             )
             self._interval_term_time_left[index][valid_env_ids] = sampled_time
-            term_cfg.func(self._env, valid_env_ids, **term_cfg.params)
+            self._invoke(term_cfg, valid_env_ids)
             fired = True
       elif mode == "step":
-        term_cfg.func(self._env, None, **term_cfg.params)
+        self._invoke(term_cfg, None)
         fired = True
       elif mode == "reset":
         assert global_env_step_count is not None
@@ -306,7 +306,7 @@ class EventManager(ManagerBase):
             global_env_step_count
           )
           self._reset_term_last_triggered_once[index][env_ids] = True
-          term_cfg.func(self._env, env_ids, **term_cfg.params)
+          self._invoke(term_cfg, env_ids)
           fired = True
         else:
           last_triggered_step = self._reset_term_last_triggered_step_id[index][env_ids]
@@ -323,10 +323,10 @@ class EventManager(ManagerBase):
             self._reset_term_last_triggered_step_id[index][valid_env_ids] = (
               global_env_step_count
             )
-            term_cfg.func(self._env, valid_env_ids, **term_cfg.params)
+            self._invoke(term_cfg, valid_env_ids)
             fired = True
       else:
-        term_cfg.func(self._env, env_ids, **term_cfg.params)
+        self._invoke(term_cfg, env_ids)
         fired = True
 
       if fired:
@@ -335,6 +335,15 @@ class EventManager(ManagerBase):
 
     if strongest_fired != RecomputeLevel.none:
       self._env.sim.recompute_constants(strongest_fired)
+
+  def _invoke(
+    self, term_cfg: EventTermCfg, env_ids: torch.Tensor | slice | None
+  ) -> None:
+    invoke = getattr(type(self._env), "invoke_model_event", None)
+    if invoke is None or not getattr(term_cfg.func, "model_fields", ()):
+      term_cfg.func(self._env, env_ids, **term_cfg.params)
+    else:
+      invoke(self._env, term_cfg.func, env_ids, **term_cfg.params)
 
   def debug_vis(self, visualizer: "DebugVisualizer") -> None:
     """Delegate debug visualization to class-based event terms."""

@@ -175,6 +175,8 @@ class SimulationCfg:
   """Deprecated and ignored. Parallel linesearch was removed in MuJoCo Warp 3.10."""
   mujoco: MujocoCfg = field(default_factory=MujocoCfg)
   nan_guard: NanGuardCfg = field(default_factory=NanGuardCfg)
+  per_world_fields: tuple[str, ...] = ()
+  """Model fields expanded before the first graph capture."""
 
   def __post_init__(self) -> None:
     if self.ls_parallel is not None:
@@ -335,6 +337,14 @@ class Simulation:
     self._reset_mask_wp = wp.zeros(self.num_envs, dtype=bool)
     self._reset_mask = TorchArray(self._reset_mask_wp)
 
+    fields = self.cfg.per_world_fields
+    if fields:
+      invalid_fields = [name for name in fields if not hasattr(self._mj_model, name)]
+      if invalid_fields:
+        raise ValueError(f"Fields not found in model: {invalid_fields}")
+      expand_model_fields(self._wp_model, self.num_envs, list(fields))
+      self._expanded_fields.update(fields)
+
     self._model_bridge = WarpBridge(self._wp_model, nworld=self.num_envs)
     self._data_bridge = WarpBridge(self._wp_data)
     self._sensor_context: SensorContext | None = None
@@ -362,6 +372,9 @@ class Simulation:
     self.forward_graph = None
     self.reset_graph = None
     self.sense_graph = None
+    self._kinematics_graph: wp.Graph | None = None
+    # Captured lazily: most runs use a single recompute level, if any.
+    self._recompute_graphs: dict[RecomputeLevel, wp.Graph] = {}
     if self.use_cuda_graph:
       with _suspend_gc(), wp.ScopedDevice(self.wp_device):
         with wp.ScopedCapture() as capture:
@@ -433,6 +446,7 @@ class Simulation:
 
   def expand_model_fields(self, fields: tuple[str, ...]) -> None:
     """Expand model fields to support per-environment parameters."""
+    fields = tuple(name for name in fields if name not in self._expanded_fields)
     if not fields:
       return
 
@@ -480,7 +494,18 @@ class Simulation:
     """
     fn = getattr(mjwarp, level.name)
     with wp.ScopedDevice(self.wp_device):
-      fn(self._wp_model, self._wp_data)
+      if not self.use_cuda_graph:
+        fn(self._wp_model, self._wp_data)
+        return
+      # These routines launch hundreds of small kernels from Python (one solve
+      # per DoF). With reset-mode randomization they run nearly every env step,
+      # so replay them as a single CUDA graph like step/forward/reset.
+      graph = self._recompute_graphs.get(level)
+      if graph is None:
+        with _suspend_gc(), wp.ScopedCapture() as capture:
+          fn(self._wp_model, self._wp_data)
+        graph = self._recompute_graphs[level] = capture.graph
+      wp.capture_launch(graph)
 
   def forward(self) -> None:
     with wp.ScopedDevice(self.wp_device):
@@ -488,6 +513,28 @@ class Simulation:
         wp.capture_launch(self.forward_graph)
       else:
         mjwarp.forward(self.wp_model, self.wp_data)
+
+  def forward_kinematics(self) -> None:
+    """Refresh poses and body velocities without collisions or dynamics.
+
+    Runs only the kinematic stages of ``forward()``: body, site, and geom frames,
+    centers of mass, and ``cvel``. Contacts, constraints, forces, accelerations,
+    and ``sensordata`` keep their previous values. Use this only when a full
+    ``forward()`` follows before anything reads those.
+    """
+    with wp.ScopedDevice(self.wp_device):
+      if not self.use_cuda_graph:
+        self._kinematics_kernel()
+        return
+      if self._kinematics_graph is None:
+        with _suspend_gc(), wp.ScopedCapture() as capture:
+          self._kinematics_kernel()
+        self._kinematics_graph = capture.graph
+      wp.capture_launch(self._kinematics_graph)
+
+  def _kinematics_kernel(self) -> None:
+    mjwarp.fwd_kinematics(self.wp_model, self.wp_data)
+    mjwarp.com_vel(self.wp_model, self.wp_data)
 
   def step(self) -> None:
     with wp.ScopedDevice(self.wp_device):
