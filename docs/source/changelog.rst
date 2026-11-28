@@ -8,6 +8,9 @@ Upcoming version (not yet released)
 Changed
 ^^^^^^^
 
+- Simulation configs expose a runtime-only reset/sense capture hook, preserving
+  full CUDA graph capture by default and eager fallback when capture is skipped.
+
 - Training and playback use local checkpoints and TensorBoard only. Legacy logger
   settings cannot enable external uploads; ONNX exports remain local.
 - ``Simulation.recompute_constants`` replays a captured CUDA graph instead of

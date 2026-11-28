@@ -178,6 +178,19 @@ class SimulationCfg:
   per_world_fields: tuple[str, ...] = ()
   """Model fields expanded before the first graph capture."""
 
+  @property
+  def capture_reset_sense(self) -> bool:
+    """Runtime-only capture hook; excluded from serialized training configs.
+
+    Step/forward capture and the device/driver/mempool gate are unaffected.
+    Leaving this unset preserves the normal full-graph path.
+    """
+    return getattr(self, "_capture_reset_sense", True)
+
+  @capture_reset_sense.setter
+  def capture_reset_sense(self, enabled: bool) -> None:
+    self._capture_reset_sense = enabled
+
   def __post_init__(self) -> None:
     if self.ls_parallel is not None:
       warnings.warn(
@@ -383,10 +396,11 @@ class Simulation:
         with wp.ScopedCapture() as capture:
           mjwarp.forward(self.wp_model, self.wp_data)
         self.forward_graph = capture.graph
-        with wp.ScopedCapture() as capture:
-          mjwarp.reset_data(self.wp_model, self.wp_data, reset=self._reset_mask_wp)
-        self.reset_graph = capture.graph
-        if self._sensor_context is not None:
+        if self.cfg.capture_reset_sense:
+          with wp.ScopedCapture() as capture:
+            mjwarp.reset_data(self.wp_model, self.wp_data, reset=self._reset_mask_wp)
+          self.reset_graph = capture.graph
+        if self.cfg.capture_reset_sense and self._sensor_context is not None:
           with wp.ScopedCapture() as capture:
             self._sense_kernel()
           self.sense_graph = capture.graph
@@ -504,7 +518,7 @@ class Simulation:
       if graph is None:
         with _suspend_gc(), wp.ScopedCapture() as capture:
           fn(self._wp_model, self._wp_data)
-        graph = self._recompute_graphs[level] = capture.graph
+        graph = self._recompute_graphs[level] = cast(wp.Graph, capture.graph)
       wp.capture_launch(graph)
 
   def forward(self) -> None:
@@ -530,7 +544,7 @@ class Simulation:
         with _suspend_gc(), wp.ScopedCapture() as capture:
           self._kinematics_kernel()
         self._kinematics_graph = capture.graph
-      wp.capture_launch(self._kinematics_graph)
+      wp.capture_launch(cast(wp.Graph, self._kinematics_graph))
 
   def _kinematics_kernel(self) -> None:
     mjwarp.fwd_kinematics(self.wp_model, self.wp_data)
